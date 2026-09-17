@@ -32,13 +32,21 @@ export async function importManuscript(text, { onPhase, onProgress, signal } = {
 }
 
 // Sources are fetched once per paper and shared by every sentence citing it.
+// `set` lets the reviewer replace a paper's source with a PDF of their own.
+export function paperKey(paper) {
+  return paper?.pmid || paper?.doi || paper?.title || ''
+}
+
 export function createSourceCache() {
   const cache = new Map()
-  return (paper) => {
-    const key = paper.pmid || paper.doi || paper.title
+  const getSource = (paper) => {
+    const key = paperKey(paper)
     if (!cache.has(key)) cache.set(key, fetchPaperSource(paper).catch((err) => { cache.delete(key); throw err }))
     return cache.get(key)
   }
+  getSource.set = (paper, source) => cache.set(paperKey(paper), Promise.resolve(source))
+  getSource.forget = (paper) => cache.delete(paperKey(paper))
+  return getSource
 }
 
 // Check one row. Returns the updated row; the human review field is untouched.
@@ -51,13 +59,13 @@ export async function checkRow(row, { getSource, signal } = {}) {
     source = await getSource(row.paper)
   } catch (err) {
     if (err?.name === 'AbortError') throw err
-    return { ...row, error: err?.message || 'The cited paper could not be fetched.' }
+    return { ...row, sourceTier: null, needsPdf: true, error: err?.message || 'The cited paper could not be fetched.' }
   }
   // The two checks fail independently: one provider being down never throws
   // away the other's answer.
   const errors = []
-  let claude = row.claude
-  let jev = row.jev
+  let claude = null
+  let jev = null
   if (hasApiKey()) {
     try {
       claude = await checkCitationSupport({ sentence: row.sentence, source })
@@ -73,7 +81,17 @@ export async function checkRow(row, { getSource, signal } = {}) {
       errors.push(`TypeSafe: ${failureMessage(err)}`)
     }
   }
-  return { ...row, sourceTier: source.tier, claude, jev, error: errors.join(' · ') || null }
+  return {
+    ...row,
+    sourceTier: source.tier,
+    fullTextNote: source.fullTextNote || null,
+    oaUrl: source.oaUrl || null,
+    userSupplied: !!source.userSupplied,
+    needsPdf: false,
+    claude,
+    jev,
+    error: errors.join(' · ') || null,
+  }
 }
 
 function failureMessage(err) {

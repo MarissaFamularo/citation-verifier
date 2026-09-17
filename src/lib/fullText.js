@@ -10,6 +10,7 @@
 // (fetching PDF bytes cross-origin is blocked; a clickable link is not).
 
 import { getNcbiKey } from './anthropic.js'
+import { ncbiFetch } from './ncbiThrottle.js'
 import { openAlexByDoi } from './openAlex.js'
 import { fetchPubMedPapers } from './pubmed.js'
 
@@ -41,9 +42,11 @@ async function withRetry(fn, { attempts = 3, delayMs = 600 } = {}) {
   throw lastError
 }
 
+const fetchAny = (url) => (url.startsWith(EUTILS) ? ncbiFetch(url, undefined, { hasKey: !!getNcbiKey() }) : fetch(url))
+
 async function getText(url) {
   return withRetry(async () => {
-    const res = await fetch(url)
+    const res = await fetchAny(url)
     if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
     return res.text()
   })
@@ -51,7 +54,7 @@ async function getText(url) {
 
 async function getJson(url) {
   return withRetry(async () => {
-    const res = await fetch(url)
+    const res = await fetchAny(url)
     if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
     return res.json()
   })
@@ -150,16 +153,20 @@ async function fetchPdfFullText(url) {
   return { hasBody: true, text, tables: '', tier: 'full_text' }
 }
 
-// Fetch the best source for a collected paper row ({ pmid, doi, abstract }).
-// Returns { tier, text, tables, pmcid, oaUrl, oaIsPdf }. Throws only when no
-// text of any kind is available (a website-only entry with no abstract).
+// Fetch the best source for a paper ({ pmid, doi, arxivId, oaPdfUrl, abstract }).
+// Returns { tier, text, tables, pmcid, oaUrl, oaIsPdf, fullTextNote }. Full text
+// is tried in order — PMC, the arXiv PDF, any other open-access PDF — before
+// settling for the abstract. `fullTextNote` says WHY only the abstract was
+// used, because "not open access" and "the lookup failed, try again" call for
+// different things from the reviewer. Throws only when there is no text at all.
 export async function fetchPaperSource(paper) {
   let pmcid = null
+  let lookupFailed = false
   if (paper.pmid) {
     try {
       pmcid = await pmidToPmcid(paper.pmid)
     } catch {
-      /* no OA mapping — abstract it is */
+      lookupFailed = true
     }
   }
 
@@ -169,14 +176,10 @@ export async function fetchPaperSource(paper) {
       const full = await fetchPmcFullText(pmcid)
       if (full.hasBody) source = full
     } catch {
-      /* fall back to the abstract */
+      lookupFailed = true
     }
   }
 
-  // arXiv serves its PDFs to browsers, so a preprint is read in full with the
-  // same PDF reader the manuscript upload uses.
-  // Other open-access PDFs are tried too; most hosts refuse browser requests,
-  // in which case the abstract is used.
   // A paper matched through Crossref arrives with no abstract and no links;
   // OpenAlex usually knows its abstract and whether a preprint copy exists.
   if (!source && !paper.pmid && !paper.arxivId && paper.doi) {
@@ -194,7 +197,15 @@ export async function fetchPaperSource(paper) {
       /* keep what we had */
     }
   }
-  const pdfUrls = [paper.arxivId ? `https://arxiv.org/pdf/${paper.arxivId}` : null, paper.oaPdfUrl].filter(Boolean)
+
+  // arXiv serves its PDFs to browsers; most other hosts refuse, in which case
+  // the next source is tried. PDFs are read with the manuscript PDF reader.
+  const oa = await resolveOaLink(paper.doi)
+  const pdfUrls = [
+    paper.arxivId ? `https://arxiv.org/pdf/${paper.arxivId}` : null,
+    paper.oaPdfUrl,
+    oa?.isPdf ? oa.url : null,
+  ].filter((url, index, all) => url && all.indexOf(url) === index)
   for (const url of source ? [] : pdfUrls) {
     try {
       source = await fetchPdfFullText(url)
@@ -204,6 +215,7 @@ export async function fetchPaperSource(paper) {
     }
   }
 
+  let fullTextNote = null
   if (!source) {
     let abstract = String(paper.abstract || '').trim()
     if (!abstract && paper.pmid) {
@@ -214,22 +226,18 @@ export async function fetchPaperSource(paper) {
         /* keep whatever we had */
       }
     }
-    if (abstract.length < MIN_ABSTRACT_CHARS && paper.doi) {
-      try {
-        const indexed = String((await openAlexByDoi(paper.doi))?.abstract || '').trim()
-        if (indexed.length > abstract.length) abstract = indexed
-      } catch {
-        /* keep whatever we had */
-      }
-    }
     if (abstract.length < MIN_ABSTRACT_CHARS && !paper.pmid) abstract = ''
     if (!abstract) {
-      throw new Error('No text is available for this paper — it has no open-access full text and no abstract on record.')
+      throw new Error('No text is available for this paper — it has no open-access full text and no abstract on record. Add its PDF to check it.')
     }
     source = { hasBody: false, text: abstract, tables: '', tier: 'abstract_only' }
+    fullTextNote = lookupFailed
+      ? 'The full-text lookup failed (network or rate limit) — re-check to try again.'
+      : oa?.url || pdfUrls.length
+        ? 'An open-access copy exists, but its host does not allow this page to download it — open it and add the PDF.'
+        : 'No open-access full text was found — add the PDF if you have access.'
   }
 
-  const oa = await resolveOaLink(paper.doi)
   return {
     tier: source.tier,
     text: source.text,
@@ -237,5 +245,13 @@ export async function fetchPaperSource(paper) {
     pmcid: pmcid || null,
     oaUrl: oa?.url || null,
     oaIsPdf: oa ? !!oa.isPdf : null,
+    fullTextNote,
   }
+}
+
+// A PDF of the cited paper supplied by the reviewer — the way past a paywall.
+export async function sourceFromPdf(arrayBuffer) {
+  const { extractPdfText } = await import('./pdfText.js')
+  const text = (await extractPdfText(arrayBuffer)).replace(/\^\{([^}]*)\}/g, '$1')
+  return { tier: 'full_text', text, tables: '', pmcid: null, oaUrl: null, oaIsPdf: null, fullTextNote: null, userSupplied: true }
 }

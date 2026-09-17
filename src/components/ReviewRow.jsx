@@ -7,7 +7,9 @@ const VERDICT_STYLE = {
   supported: 'bg-teal-100 text-teal-900 dark:bg-teal-900/40 dark:text-teal-200',
   flagged: 'bg-amber-100 text-amber-900 dark:bg-amber-900/40 dark:text-amber-200',
   refuted: 'bg-red-100 text-red-900 dark:bg-red-900/40 dark:text-red-200',
+  unverified: 'bg-stone-200 text-stone-800 dark:bg-stone-700 dark:text-stone-100',
 }
+const VERDICT_LABEL = { supported: 'supported', flagged: 'flagged', refuted: 'not supported', unverified: 'not in abstract — needs full text' }
 const RELATION_LABEL = { supports: 'supports', contradicts: 'contradicts', says_nothing: 'says nothing' }
 
 function Badge({ className = '', children }) {
@@ -32,9 +34,11 @@ function SourceContext({ row, getSource }) {
   return <p className="mt-1 whitespace-pre-wrap text-xs text-stone-600 dark:text-stone-400">…{view.before}<mark>{view.hit}</mark>{view.after}…</p>
 }
 
-export default function ReviewRow({ row, busy, canCheck, getSource, onCheck, onDecision }) {
+export default function ReviewRow({ row, busy, canCheck, getSource, onCheck, onAddPdf, onDecision }) {
   const { paper, claude, jev, review } = row
-  const tier = row.sourceTier === 'full_text' ? 'full text checked' : row.sourceTier === 'abstract_only' ? 'abstract only checked' : null
+  const paperUrl = paper ? (row.oaUrl || (paper.pmid ? `https://pubmed.ncbi.nlm.nih.gov/${paper.pmid}/` : paper.sourceUrl || (paper.doi ? `https://doi.org/${paper.doi}` : null))) : null
+  const wantsPdf = paper && row.sentence && (row.sourceTier === 'abstract_only' || row.needsPdf)
+  const tier = row.sourceTier === 'full_text' ? (row.userSupplied ? 'full text checked (your PDF)' : 'full text checked') : row.sourceTier === 'abstract_only' ? 'abstract only checked' : null
 
   return (
     <article className="panel space-y-3 p-4">
@@ -56,7 +60,7 @@ export default function ReviewRow({ row, busy, canCheck, getSource, onCheck, onD
       {row.sentence && (
         <div className="space-y-2 text-sm">
           <div className="flex flex-wrap items-center gap-2">
-            {claude && <Badge className={VERDICT_STYLE[claude.verdict]}>Claude: {claude.verdict}</Badge>}
+            {claude && <Badge className={VERDICT_STYLE[claude.verdict]}>Claude: {VERDICT_LABEL[claude.verdict] || claude.verdict}</Badge>}
             {jev && (
               <Badge className={jev.relation === 'supports' && !jev.needsReview ? VERDICT_STYLE.supported : jev.relation === 'contradicts' ? VERDICT_STYLE.refuted : VERDICT_STYLE.flagged}>
                 Jev: {RELATION_LABEL[jev.relation] || jev.relation} · reliability {Math.round(jev.reliability * 100)}% · confidence {jev.confidence.toFixed(2)}
@@ -77,6 +81,16 @@ export default function ReviewRow({ row, busy, canCheck, getSource, onCheck, onD
           )}
           {jev && !jev.anchored && <p className="text-xs text-stone-500">No proven quote to anchor on, so Jev scored the sentence against the opening of the source text.</p>}
           {row.error && <p className="text-red-700 dark:text-red-300">{row.error}</p>}
+          {wantsPdf && (
+            <div className="flex flex-wrap items-center gap-2 rounded border border-dashed border-stone-300 p-2 text-xs text-stone-600 dark:border-stone-700 dark:text-stone-400">
+              <span className="min-w-48 flex-1">{row.fullTextNote || 'Only the abstract could be checked.'}</span>
+              {paperUrl && <a className="btn" href={paperUrl} target="_blank" rel="noreferrer">Open the paper</a>}
+              <label className={`btn ${busy ? 'pointer-events-none opacity-50' : ''}`}>
+                Add its PDF and re-check
+                <input type="file" className="hidden" accept=".pdf,application/pdf" disabled={busy} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; if (file) onAddPdf(file) }} />
+              </label>
+            </div>
+          )}
         </div>
       )}
 

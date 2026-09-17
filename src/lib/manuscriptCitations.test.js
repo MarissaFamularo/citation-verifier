@@ -140,3 +140,10 @@ test('groupCitationsByPaper groups rows by literature id in order', () => {
   assert.deepEqual(grouped.get('p1').map((row) => row.id), ['a', 'c'])
   assert.deepEqual(grouped.get('p2').map((row) => row.id), ['b'])
 })
+
+test('an abstract that is silent on the claim is unverified, not refuted', () => {
+  const abstract = { tier: 'abstract_only', text: 'We studied bypass surgery outcomes.', tables: '' }
+  assert.equal(buildSupportVerdict({ supported: false, contradicted: false, reason: 'Not addressed.' }, abstract).verdict, 'unverified')
+  assert.equal(buildSupportVerdict({ supported: false, contradicted: true, reason: 'Says the opposite.' }, abstract).verdict, 'refuted')
+  assert.equal(buildSupportVerdict({ supported: false, contradicted: false, reason: 'Not addressed.' }, { ...abstract, tier: 'full_text' }).verdict, 'refuted')
+})

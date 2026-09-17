@@ -1,3 +1,4 @@
+import { ncbiFetch } from './ncbiThrottle.js'
 import { fetchPubMedPapers } from './pubmed.js'
 
 const EUTILS = 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils'
@@ -70,7 +71,7 @@ async function pubMedPaperByDoi(doi, { signal } = {}) {
     term: `${doi}[AID]`,
     tool: 'citation-verifier',
   })
-  const response = await fetch(`${EUTILS}/esearch.fcgi?${search}`, { signal })
+  const response = await ncbiFetch(`${EUTILS}/esearch.fcgi?${search}`, { signal })
   if (!response.ok) throw new Error(`PubMed request failed (${response.status}).`)
   const json = await response.json()
   const pmid = json?.esearchresult?.idlist?.[0]

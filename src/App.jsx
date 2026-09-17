@@ -1,9 +1,10 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import KeysPanel from './components/KeysPanel.jsx'
 import ReviewRow from './components/ReviewRow.jsx'
 import { hasApiKey } from './lib/anthropic.js'
 import { readManuscriptFile } from './lib/manuscriptImport.js'
-import { checkRow, createSourceCache, importManuscript } from './lib/pipeline.js'
+import { sourceFromPdf } from './lib/fullText.js'
+import { checkRow, createSourceCache, importManuscript, paperKey } from './lib/pipeline.js'
 import { parseReviewFile, rowsToCsv, serializeReview, setDecision, summarize } from './lib/review.js'
 import { hasTypesafeKey } from './lib/typesafe.js'
 
@@ -11,8 +12,21 @@ const CHECK_CONCURRENCY = 4
 
 const FILTERS = {
   all: () => true,
-  attention: (row) => row.sentence && (row.error || row.claude?.verdict === 'refuted' || row.claude?.verdict === 'flagged' || (row.jev && (row.jev.relation !== 'supports' || row.jev.needsReview))),
+  attention: (row) => row.sentence && (row.error || ['refuted', 'flagged', 'unverified'].includes(row.claude?.verdict) || (row.jev && (row.jev.relation !== 'supports' || row.jev.needsReview))),
   unreviewed: (row) => row.sentence && !row.review?.decision,
+  abstractOnly: (row) => row.sentence && (row.sourceTier === 'abstract_only' || row.needsPdf),
+}
+
+const AUTOSAVE_KEY = 'citationverifier.session.v1'
+
+// The table survives a reload (this tab only; gone when the tab closes).
+function loadAutosave() {
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(AUTOSAVE_KEY) || 'null')
+    return Array.isArray(saved?.rows) ? saved : null
+  } catch {
+    return null
+  }
 }
 
 function download(name, text, type) {
@@ -24,15 +38,23 @@ function download(name, text, type) {
 
 export default function App() {
   const [keysVersion, setKeysVersion] = useState(0)
-  const [fileName, setFileName] = useState('')
+  const [fileName, setFileName] = useState(() => loadAutosave()?.fileName || '')
   const [pasted, setPasted] = useState('')
-  const [rows, setRows] = useState([])
+  const [rows, setRows] = useState(() => loadAutosave()?.rows || [])
   const [status, setStatus] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [filter, setFilter] = useState('all')
   const abortRef = useRef(null)
   const getSource = useMemo(() => createSourceCache(), [])
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(AUTOSAVE_KEY, JSON.stringify({ fileName, rows }))
+    } catch {
+      /* storage full or unavailable — the Save review file still works */
+    }
+  }, [fileName, rows])
 
   const canCheck = (hasApiKey() || hasTypesafeKey()) && keysVersion >= 0
   const summary = summarize(rows)
@@ -112,6 +134,20 @@ export default function App() {
     })
   }
 
+  // The reviewer's own PDF of a cited paper replaces its source, and every
+  // sentence citing that paper is checked again against the full text.
+  async function addPaperPdf(row, file) {
+    setError('')
+    try {
+      getSource.set(row.paper, await sourceFromPdf(await file.arrayBuffer()))
+    } catch (err) {
+      setError(err?.message || 'That PDF could not be read.')
+      return
+    }
+    const key = paperKey(row.paper)
+    await checkRows(rows.filter((candidate) => candidate.sentence && candidate.paper && paperKey(candidate.paper) === key))
+  }
+
   return (
     <main className="mx-auto max-w-5xl space-y-5 px-4 py-8">
       <header>
@@ -156,13 +192,14 @@ export default function App() {
         <section className="space-y-3">
           <div className="panel flex flex-wrap items-center gap-2 p-3 text-sm">
             <span className="mr-auto">
-              {summary.sentences} citing sentences · {summary.checked} checked · {summary.reviewed} reviewed
+              {summary.sentences} citing sentences · {summary.checked} checked ({rows.filter((row) => row.sourceTier === 'full_text').length} on full text) · {summary.reviewed} reviewed
               {summary.uncited > 0 && ` · ${summary.uncited} references never cited in the text`}
             </span>
             <select className="field w-auto" value={filter} onChange={(e) => setFilter(e.target.value)}>
               <option value="all">Show all</option>
               <option value="attention">Needs attention</option>
               <option value="unreviewed">Not yet reviewed</option>
+              <option value="abstractOnly">Checked on abstract only</option>
             </select>
             <button className="btn btn-primary" disabled={busy || !canCheck} title={canCheck ? '' : 'Add an API key first'} onClick={() => checkRows(rows.filter((row) => row.sentence && row.paper && !row.claude && !row.jev))}>
               Check all unchecked ({rows.filter((row) => row.sentence && row.paper && !row.claude && !row.jev).length})
@@ -177,7 +214,8 @@ export default function App() {
               busy={busy}
               canCheck={canCheck}
               getSource={getSource}
-              onCheck={() => checkRows([row])}
+              onCheck={() => { getSource.forget(row.paper); return checkRows([row]) }}
+              onAddPdf={(file) => addPaperPdf(row, file)}
               onDecision={(change) => setRows((current) => current.map((r) => (r.id === row.id ? setDecision(r, change) : r)))}
             />
           ))}

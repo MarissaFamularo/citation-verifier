@@ -1,4 +1,5 @@
 import { getNcbiKey } from './anthropic.js'
+import { ncbiFetch } from './ncbiThrottle.js'
 import { annotatePapersByConceptCoverage, normalizeSearchConcepts } from './searchConcepts.js'
 
 const EUTILS = 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils'
@@ -136,7 +137,7 @@ function parseArticleDetails(xmlText) {
 async function fetchOk(url, options = {}) {
   const key = getNcbiKey()
   const keyed = key && url.startsWith(EUTILS) ? `${url}&api_key=${encodeURIComponent(key)}` : url
-  const response = await fetch(keyed, options)
+  const response = url.startsWith(EUTILS) ? await ncbiFetch(keyed, options, { hasKey: !!key }) : await fetch(keyed, options)
   if (!response.ok) throw new Error(`PubMed request failed (${response.status}).`)
   return response
 }

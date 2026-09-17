@@ -67,7 +67,7 @@ speeds up PubMed lookups.
 
 - PDFs are read from the position of the text on the page (columns, real superscripts, running headers), which works on typeset journal PDFs and ordinary manuscript PDFs with selectable text. Scanned PDFs are not read. Text copy-pasted out of a PDF viewer is not reliable — upload the file.
 - References that are not papers (guidelines, regulations, websites, software) are listed but cannot be checked automatically. Neither can a paper with no abstract on record whose publisher blocks browser downloads — the row says so rather than guessing.
-- Paywalled papers are checked against the abstract only.
+- Paywalled papers are checked against the abstract only, and an abstract that is silent on the claim is reported as **needs full text**, never as unsupported. Add the paper's PDF on its row and every sentence citing it is re-checked against the full text.
 - Model verdicts are a triage aid, not a finding. Thresholds have not yet been
   validated on a labeled set of biomedical citations.
 
