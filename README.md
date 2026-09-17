@@ -2,6 +2,8 @@
 
 A free, standalone tool from [Paper Trellis](https://papertrellis.com).
 
+**Try it: https://papertrellis-citation-verifier.netlify.app**
+
 Does the paper a manuscript cites actually support the sentence that cites it?
 
 Upload a manuscript. The tool pulls out the reference list, pairs every citing
@@ -56,7 +58,7 @@ cp .env.example .env.local   # set VITE_CONTACT_EMAIL (used for Unpaywall lookup
 npm run dev
 ```
 
-`npm test` runs the unit tests; `samples/sample-manuscript.txt` is a tiny
+`npm test` runs the unit tests; `public/sample-manuscript.txt` is a tiny
 manuscript with one deliberately wrong citation to try it on.
 
 You need an [Anthropic API key](https://console.anthropic.com) and/or a

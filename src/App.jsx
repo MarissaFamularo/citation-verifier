@@ -169,6 +169,11 @@ export default function App() {
             Upload .docx, .pdf, .txt, or a saved review (.json)
             <input type="file" className="hidden" accept=".docx,.pdf,.txt,.md,.json,text/plain,application/json,application/pdf" onChange={onFile} disabled={busy} />
           </label>
+          <button
+            className="btn"
+            disabled={busy}
+            onClick={async () => importText(await (await fetch('/sample-manuscript.txt')).text(), 'sample-manuscript.txt')}
+          >Try a sample (one citation is deliberately wrong)</button>
           {fileName && <span className="text-sm text-stone-600 dark:text-stone-400">{fileName}</span>}
         </div>
         <details>
