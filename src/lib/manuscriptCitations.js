@@ -18,10 +18,10 @@ import { findQuoteSpan } from './sourceLocate.js'
 export const SUPPORT_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['supported', 'contradicted', 'reason', 'source_quote', 'quote_location'],
+  required: ['supported', 'relation', 'reason', 'source_quote', 'quote_location'],
   properties: {
     supported: { type: 'boolean', description: 'True only when the source text itself backs the sentence as cited.' },
-    contradicted: { type: 'boolean', description: 'True only when the source text states the opposite of the sentence, or the sentence overstates what the source reports. False when the source simply does not address the claim.' },
+    relation: { type: 'string', enum: ['supports', 'contradicts', 'off_topic', 'silent'], description: 'supports: the source backs the claim. contradicts: the source states the opposite, or the sentence overstates what the source reports. off_topic: the source is about a different subject than the claim (a different intervention, exposure, or question), so reading more of it would not help. silent: the source is on the right subject but the provided text does not address this specific claim.' },
     reason: { type: 'string', description: 'One clause a teammate can act on.' },
     source_quote: { anyOf: [{ type: 'string' }, { type: 'null' }], description: 'The verbatim passage from the source text that best backs the sentence, or null when unsupported.' },
     quote_location: { anyOf: [{ type: 'string' }, { type: 'null' }], description: 'Where the quote is, e.g. "Results" or "Table 2".' },
@@ -36,7 +36,7 @@ Rules:
 - When supported, copy into source_quote the single passage from the source text that best backs the sentence — VERBATIM, an exact substring, character for character. Do not paraphrase, re-punctuate, or clean up numbers. quote_location names where it sits (e.g. "Results" or "Table 2").
 - If you cannot find an exact supporting passage, set supported=false. Never fabricate or reconstruct a quote.
 - supported=false when the source contradicts the sentence, does not address its claim, or the sentence overstates the source (the source's "may" cited as "does"; a non-significant result cited as a benefit).
-- contradicted=true only for the first and last of those: the source says the opposite, or the sentence overstates it. When the source text is silent on the claim — common when only an abstract is provided — contradicted=false. Silence is not contradiction.
+- relation says WHY: "supports" exactly when supported=true; otherwise "contradicts" (the source says the opposite, or the sentence overstates it), "off_topic" (the source studies something else — e.g. cited for a drug effect but it is a trial of two surgical strategies that never involves that drug), or "silent" (right subject, but the provided text — often only an abstract — does not reach this specific claim). Silence is not contradiction.
 - Never use outside knowledge about the paper, the field, or the manuscript. The provided source text is the whole universe.
 
 The app will verify source_quote is an exact substring of the source text before showing any Supported badge; an unlocatable quote is discarded. When genuinely uncertain, refute — an unsupported citation shown as supported is the one fatal failure.`
@@ -81,9 +81,11 @@ export function buildSupportVerdict(result, source, numbers = []) {
     // An abstract that is silent on the claim proves nothing either way: the
     // support may sit in the paper's body. Only a contradiction, or silence
     // from the full text, is a finding against the citation.
-    const unverified = tier === 'abstract_only' && !result?.contradicted
+    const relation = result?.relation || (result?.contradicted ? 'contradicts' : 'silent')
+    const unverified = tier === 'abstract_only' && relation === 'silent'
     return {
       verdict: unverified ? 'unverified' : 'refuted',
+      relation,
       reason: unverified
         ? `Not found in the abstract — the full text is needed to judge this. ${clean(result?.reason)}`.trim()
         : clean(result?.reason) || 'The source audit could not support this sentence.',

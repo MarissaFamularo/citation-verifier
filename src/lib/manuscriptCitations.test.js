@@ -143,7 +143,8 @@ test('groupCitationsByPaper groups rows by literature id in order', () => {
 
 test('an abstract that is silent on the claim is unverified, not refuted', () => {
   const abstract = { tier: 'abstract_only', text: 'We studied bypass surgery outcomes.', tables: '' }
-  assert.equal(buildSupportVerdict({ supported: false, contradicted: false, reason: 'Not addressed.' }, abstract).verdict, 'unverified')
-  assert.equal(buildSupportVerdict({ supported: false, contradicted: true, reason: 'Says the opposite.' }, abstract).verdict, 'refuted')
-  assert.equal(buildSupportVerdict({ supported: false, contradicted: false, reason: 'Not addressed.' }, { ...abstract, tier: 'full_text' }).verdict, 'refuted')
+  assert.equal(buildSupportVerdict({ supported: false, relation: 'silent', reason: 'Not addressed.' }, abstract).verdict, 'unverified')
+  assert.equal(buildSupportVerdict({ supported: false, relation: 'contradicts', reason: 'Says the opposite.' }, abstract).verdict, 'refuted')
+  assert.equal(buildSupportVerdict({ supported: false, relation: 'off_topic', reason: 'A surgical trial; never involves statins.' }, abstract).verdict, 'refuted')
+  assert.equal(buildSupportVerdict({ supported: false, relation: 'silent', reason: 'Not addressed.' }, { ...abstract, tier: 'full_text' }).verdict, 'refuted')
 })

@@ -9,6 +9,7 @@ const VERDICT_STYLE = {
   refuted: 'bg-red-100 text-red-900 dark:bg-red-900/40 dark:text-red-200',
   unverified: 'bg-stone-200 text-stone-800 dark:bg-stone-700 dark:text-stone-100',
 }
+const REFUTED_LABEL = { contradicts: 'contradicted or overstated', off_topic: 'paper is about something else', silent: 'not found in the full text' }
 const VERDICT_LABEL = { supported: 'supported', flagged: 'flagged', refuted: 'not supported', unverified: 'not in abstract — needs full text' }
 const RELATION_LABEL = { supports: 'supports', contradicts: 'contradicts', says_nothing: 'says nothing' }
 
@@ -38,6 +39,7 @@ export default function ReviewRow({ row, busy, canCheck, getSource, onCheck, onA
   const { paper, claude, jev, review } = row
   const paperUrl = paper ? (row.oaUrl || (paper.pmid ? `https://pubmed.ncbi.nlm.nih.gov/${paper.pmid}/` : paper.sourceUrl || (paper.doi ? `https://doi.org/${paper.doi}` : null))) : null
   const wantsPdf = paper && row.sentence && (row.sourceTier === 'abstract_only' || row.needsPdf)
+  const settled = claude ? claude.verdict === 'supported' : jev?.relation === 'supports' && !jev.needsReview
   const tier = row.sourceTier === 'full_text' ? (row.userSupplied ? 'full text checked (your PDF)' : 'full text checked') : row.sourceTier === 'abstract_only' ? 'abstract only checked' : null
 
   return (
@@ -60,7 +62,7 @@ export default function ReviewRow({ row, busy, canCheck, getSource, onCheck, onA
       {row.sentence && (
         <div className="space-y-2 text-sm">
           <div className="flex flex-wrap items-center gap-2">
-            {claude && <Badge className={VERDICT_STYLE[claude.verdict]}>Claude: {VERDICT_LABEL[claude.verdict] || claude.verdict}</Badge>}
+            {claude && <Badge className={VERDICT_STYLE[claude.verdict]}>Claude: {REFUTED_LABEL[claude.relation] && claude.verdict === 'refuted' ? REFUTED_LABEL[claude.relation] : VERDICT_LABEL[claude.verdict] || claude.verdict}</Badge>}
             {jev && (
               <Badge className={jev.relation === 'supports' && !jev.needsReview ? VERDICT_STYLE.supported : jev.relation === 'contradicts' ? VERDICT_STYLE.refuted : VERDICT_STYLE.flagged}>
                 Jev: {RELATION_LABEL[jev.relation] || jev.relation} · reliability {Math.round(jev.reliability * 100)}% · confidence {jev.confidence.toFixed(2)}
@@ -81,7 +83,13 @@ export default function ReviewRow({ row, busy, canCheck, getSource, onCheck, onA
           )}
           {jev && !jev.anchored && <p className="text-xs text-stone-500">No proven quote to anchor on, so Jev scored the sentence against the opening of the source text.</p>}
           {row.error && <p className="text-red-700 dark:text-red-300">{row.error}</p>}
-          {wantsPdf && (
+          {wantsPdf && settled && (
+            <label className={`inline-block cursor-pointer text-xs text-stone-500 underline ${busy ? 'pointer-events-none opacity-50' : ''}`}>
+              Check against the full text instead (add the paper's PDF)
+              <input type="file" className="hidden" accept=".pdf,application/pdf" disabled={busy} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; if (file) onAddPdf(file) }} />
+            </label>
+          )}
+          {wantsPdf && !settled && (
             <div className="flex flex-wrap items-center gap-2 rounded border border-dashed border-stone-300 p-2 text-xs text-stone-600 dark:border-stone-700 dark:text-stone-400">
               <span className="min-w-48 flex-1">{row.fullTextNote || 'Only the abstract could be checked.'}</span>
               {paperUrl && <a className="btn" href={paperUrl} target="_blank" rel="noreferrer">Open the paper</a>}
