@@ -10,6 +10,7 @@
 // (fetching PDF bytes cross-origin is blocked; a clickable link is not).
 
 import { getNcbiKey } from './anthropic.js'
+import { openAlexByDoi } from './openAlex.js'
 import { fetchPubMedPapers } from './pubmed.js'
 
 const EUTILS = 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils'
@@ -129,6 +130,20 @@ export async function resolveOaLink(doi) {
   }
 }
 
+// An abstract shorter than this is usually not one — indexes sometimes hold a
+// byline or a proceedings title in that field, and checking a sentence against
+// that would wrongly read as "unsupported".
+export const MIN_ABSTRACT_CHARS = 300
+
+async function fetchPdfFullText(url) {
+  const response = await fetch(url)
+  if (!response.ok) throw new Error(`Full-text request failed (${response.status}).`)
+  const { extractPdfText } = await import('./pdfText.js')
+  // Superscript markers matter in the manuscript, not in the cited paper.
+  const text = (await extractPdfText(await response.arrayBuffer())).replace(/\^\{([^}]*)\}/g, '$1')
+  return { hasBody: true, text, tables: '', tier: 'full_text' }
+}
+
 // Fetch the best source for a collected paper row ({ pmid, doi, abstract }).
 // Returns { tier, text, tables, pmcid, oaUrl, oaIsPdf }. Throws only when no
 // text of any kind is available (a website-only entry with no abstract).
@@ -152,6 +167,37 @@ export async function fetchPaperSource(paper) {
     }
   }
 
+  // arXiv serves its PDFs to browsers, so a preprint is read in full with the
+  // same PDF reader the manuscript upload uses.
+  // Other open-access PDFs are tried too; most hosts refuse browser requests,
+  // in which case the abstract is used.
+  // A paper matched through Crossref arrives with no abstract and no links;
+  // OpenAlex usually knows its abstract and whether a preprint copy exists.
+  if (!source && !paper.pmid && !paper.arxivId && paper.doi) {
+    try {
+      const indexed = await openAlexByDoi(paper.doi)
+      if (indexed) {
+        paper = {
+          ...paper,
+          arxivId: indexed.arxivId,
+          oaPdfUrl: paper.oaPdfUrl || indexed.oaPdfUrl,
+          abstract: String(paper.abstract || '').length >= indexed.abstract.length ? paper.abstract : indexed.abstract,
+        }
+      }
+    } catch {
+      /* keep what we had */
+    }
+  }
+  const pdfUrls = [paper.arxivId ? `https://arxiv.org/pdf/${paper.arxivId}` : null, paper.oaPdfUrl].filter(Boolean)
+  for (const url of source ? [] : pdfUrls) {
+    try {
+      source = await fetchPdfFullText(url)
+      break
+    } catch {
+      /* fall back to the next source */
+    }
+  }
+
   if (!source) {
     let abstract = String(paper.abstract || '').trim()
     if (!abstract && paper.pmid) {
@@ -162,6 +208,15 @@ export async function fetchPaperSource(paper) {
         /* keep whatever we had */
       }
     }
+    if (abstract.length < MIN_ABSTRACT_CHARS && paper.doi) {
+      try {
+        const indexed = String((await openAlexByDoi(paper.doi))?.abstract || '').trim()
+        if (indexed.length > abstract.length) abstract = indexed
+      } catch {
+        /* keep whatever we had */
+      }
+    }
+    if (abstract.length < MIN_ABSTRACT_CHARS && !paper.pmid) abstract = ''
     if (!abstract) {
       throw new Error('No text is available for this paper — it has no open-access full text and no abstract on record.')
     }

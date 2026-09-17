@@ -9,6 +9,7 @@
 
 import { extractStructured, getNcbiKey, MODELS } from './anthropic.js'
 import { resolveDirectPaper } from './directPaper.js'
+import { arxivDoi, arxivIdFrom, openAlexByDoi, searchOpenAlexByTitle } from './openAlex.js'
 import { fetchPubMedPapers, searchPubMed } from './pubmed.js'
 
 // Bounds: a 100-entry bibliography is ~25k characters; beyond that the paste is
@@ -286,6 +287,8 @@ function shapePaper(paper, extra = {}) {
     pubmedUrl: paper.pubmedUrl || null,
     sourceUrl: paper.sourceUrl || paper.pubmedUrl || null,
     sourceType: paper.sourceType || (paper.pmid ? 'pubmed' : 'doi'),
+    arxivId: paper.arxivId || null,
+    oaPdfUrl: paper.oaPdfUrl || null,
     ...extra,
   }
 }
@@ -384,10 +387,44 @@ export async function resolveReference(reference, { signal } = {}) {
       }
     }
   }
+  // Not in PubMed: preprints, conference papers, and non-biomedical journals
+  // are looked up in OpenAlex — by arXiv id or DOI first, then by title.
+  try {
+    const found = await resolveViaOpenAlex(reference, { signal })
+    if (found) return found
+  } catch (err) {
+    if (err?.name === 'AbortError') throw err
+    lookupError = lookupError || err
+  }
   if (lookupError) {
     return { reference, paper: null, method: 'error', confidence: 'none', error: lookupFailureMessage(lookupError) }
   }
   return { reference, paper: null, method: 'none', confidence: 'none' }
+}
+
+async function resolveViaOpenAlex(reference, { signal } = {}) {
+  const arxivId = arxivIdFrom(reference.doi) || arxivIdFrom(reference.raw)
+  const dois = [...new Set([arxivId ? arxivDoi(arxivId) : null, reference.doi].filter(Boolean))]
+  for (const doi of dois) {
+    const paper = await withRetry(() => openAlexByDoi(doi, { signal }), { signal })
+    if (!paper) continue
+    const confidence = scoreMatch(reference, paper)
+    if (confidence !== 'reject') {
+      return { reference, paper: shapePaper({ ...paper, arxivId: paper.arxivId || arxivId }), method: arxivId ? 'arxiv' : 'doi', confidence }
+    }
+  }
+  if (!reference.title) return null
+  const papers = await withRetry(() => searchOpenAlexByTitle(reference.title, { signal }), { signal })
+  let best = null
+  for (const paper of papers) {
+    const confidence = scoreMatch(reference, paper)
+    if (confidence === 'reject') continue
+    const similarity = titleSimilarity(reference.title, paper.title)
+    if (!best || (confidence === 'match' && best.confidence !== 'match') || (confidence === best.confidence && similarity > best.similarity)) {
+      best = { paper, confidence, similarity }
+    }
+  }
+  return best ? { reference, paper: shapePaper(best.paper), method: 'title', confidence: best.confidence } : null
 }
 
 function pause(ms, signal) {

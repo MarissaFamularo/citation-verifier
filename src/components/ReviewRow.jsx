@@ -41,9 +41,11 @@ export default function ReviewRow({ row, busy, canCheck, getSource, onCheck, onD
       <div className="flex flex-wrap items-baseline gap-2 text-sm">
         <span className="font-semibold">[{row.refNumber}]</span>
         {paper
-          ? <a className="underline decoration-stone-400" href={paper.pmid ? `https://pubmed.ncbi.nlm.nih.gov/${paper.pmid}/` : `https://doi.org/${paper.doi}`} target="_blank" rel="noreferrer">{paper.title}</a>
+          ? <a className="underline decoration-stone-400" href={paper.pmid ? `https://pubmed.ncbi.nlm.nih.gov/${paper.pmid}/` : paper.sourceUrl || `https://doi.org/${paper.doi}`} target="_blank" rel="noreferrer">{paper.title}</a>
           : <span className="text-stone-600 dark:text-stone-400">{row.referenceRaw}</span>}
-        {!paper && <Badge className={VERDICT_STYLE.flagged}>not matched in PubMed — check this one by hand</Badge>}
+        {!paper && <Badge className={VERDICT_STYLE.flagged}>no matching paper found — check this one by hand</Badge>}
+        {paper && !paper.pmid && <span className="text-xs text-stone-500">{paper.sourceType === 'arxiv' ? 'arXiv' : 'via OpenAlex'}</span>}
+        {row.matchConfidence === 'check' && <Badge className={VERDICT_STYLE.flagged}>loose title match — confirm it is the right paper</Badge>}
         {row.section && <span className="text-xs text-stone-500">{row.section}</span>}
       </div>
 

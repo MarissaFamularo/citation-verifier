@@ -60,8 +60,8 @@ export default function App() {
       setStatus('Reading the manuscript…')
       const outcome = await importManuscript(text, {
         signal,
-        onPhase: (phase) => setStatus(phase === 'references' ? 'Reading the reference list…' : 'Matching references to PubMed…'),
-        onProgress: (done, total) => setStatus(`Matching references to PubMed… ${done}/${total}`),
+        onPhase: (phase) => setStatus(phase === 'references' ? 'Reading the reference list…' : 'Matching references to papers…'),
+        onProgress: (done, total) => setStatus(`Matching references to papers… ${done}/${total}`),
       })
       setFileName(name)
       setRows(outcome.rows)
