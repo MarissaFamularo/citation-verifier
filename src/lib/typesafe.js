@@ -8,14 +8,19 @@
 //
 // Same key doctrine as lib/anthropic.js: the key lives in browser storage only
 // (sessionStorage by default, localStorage on "remember"). Every TypeSafe call
-// goes through callSystemOne, so if the API ever needs a pass-through proxy,
-// ENDPOINT is the one line that changes.
+// goes through callSystemOne.
+//
+// TypeSafe's API refuses browser requests (no CORS header), so the call goes to
+// a same-origin path that the host forwards untouched to api.typesafe.ai — a
+// Netlify rewrite in production (netlify.toml), the Vite proxy in development
+// (vite.config.js). The pass-through stores and logs nothing; the key still
+// comes from this browser on every request.
 
 import { stripCitationMarkers } from './manuscriptImport.js'
 import { findQuoteSpan } from './sourceLocate.js'
 
 const KEY_STORAGE = 'citationverifier.typesafe_key'
-const ENDPOINT = import.meta.env?.VITE_TYPESAFE_ENDPOINT || 'https://api.typesafe.ai/v1/systemone'
+const ENDPOINT = import.meta.env?.VITE_TYPESAFE_ENDPOINT || '/api/typesafe/systemone'
 
 // Pinned, not `jev-latest`: review thresholds are tuned against one version,
 // and the response reports which model answered so every mark is attributable.

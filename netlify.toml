@@ -1,3 +1,12 @@
 [build]
   command = "npm run build"
   publish = "dist"
+
+# TypeSafe's API does not answer browser requests (no CORS header), so the app
+# calls this same-origin path and Netlify forwards it untouched. Nothing is
+# stored; the Authorization header carries the visitor's own key.
+[[redirects]]
+  from = "/api/typesafe/*"
+  to = "https://api.typesafe.ai/v1/:splat"
+  status = 200
+  force = true

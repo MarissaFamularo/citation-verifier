@@ -46,15 +46,37 @@ export function createSourceCache() {
 export async function checkRow(row, { getSource, signal } = {}) {
   if (!row.sentence) return row
   if (!row.paper) return { ...row, error: 'This reference could not be matched to a paper, so there is nothing to check it against.' }
+  let source
   try {
-    const source = await getSource(row.paper)
-    const claude = hasApiKey() ? await checkCitationSupport({ sentence: row.sentence, source }) : null
-    const jev = hasTypesafeKey()
-      ? await scoreCitationSupport({ sentence: row.sentence, source, quote: claude?.quote || null, signal })
-      : null
-    return { ...row, sourceTier: source.tier, claude, jev, error: null }
+    source = await getSource(row.paper)
   } catch (err) {
     if (err?.name === 'AbortError') throw err
-    return { ...row, error: err?.message || 'The check failed.' }
+    return { ...row, error: err?.message || 'The cited paper could not be fetched.' }
   }
+  // The two checks fail independently: one provider being down never throws
+  // away the other's answer.
+  const errors = []
+  let claude = row.claude
+  let jev = row.jev
+  if (hasApiKey()) {
+    try {
+      claude = await checkCitationSupport({ sentence: row.sentence, source })
+    } catch (err) {
+      errors.push(`Claude: ${failureMessage(err)}`)
+    }
+  }
+  if (hasTypesafeKey()) {
+    try {
+      jev = await scoreCitationSupport({ sentence: row.sentence, source, quote: claude?.quote || null, signal })
+    } catch (err) {
+      if (err?.name === 'AbortError') throw err
+      errors.push(`TypeSafe: ${failureMessage(err)}`)
+    }
+  }
+  return { ...row, sourceTier: source.tier, claude, jev, error: errors.join(' · ') || null }
+}
+
+function failureMessage(err) {
+  const message = err?.message || 'the check failed.'
+  return message === 'Failed to fetch' ? 'the request never reached the service (network or browser block).' : message
 }

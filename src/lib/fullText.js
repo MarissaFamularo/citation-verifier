@@ -3,7 +3,7 @@
 // Ported from Verastar's pipeline/sources.js + openaccess.js. Every endpoint is
 // CORS-open, so the browser calls them directly. Preference order: PMC
 // open-access full text (body prose + flattened tables, resolved live via
-// idconv), falling back to the abstract for the majority of papers that are
+// elink), falling back to the abstract for the majority of papers that are
 // not open access. Verifying against the abstract is the point — analysis
 // covers the whole collection, not just the OA subset — and the Unpaywall link
 // gives the reader a legal path to the full paper in their own browser
@@ -14,7 +14,6 @@ import { openAlexByDoi } from './openAlex.js'
 import { fetchPubMedPapers } from './pubmed.js'
 
 const EUTILS = 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils'
-const IDCONV = 'https://www.ncbi.nlm.nih.gov/pmc/tools/idconv/api/v1/articles'
 const UNPAYWALL = 'https://api.unpaywall.org/v2'
 // Unpaywall's politeness policy wants a contact email per request. Not a
 // secret; a fork can point it at its own with VITE_CONTACT_EMAIL.
@@ -58,10 +57,17 @@ async function getJson(url) {
   })
 }
 
-// PMID -> PMCID via idconv. Returns e.g. "PMC11848676" or null (not in OA).
+// PMID -> PMCID via eutils elink. Returns e.g. "PMC11848676" or null (not in
+// PMC). NCBI's idconv service no longer answers browser requests (no CORS
+// header since its move to pmc.ncbi.nlm.nih.gov); elink does.
+export function pmcidFromElink(data) {
+  const links = (data?.linksets?.[0]?.linksetdbs || []).find((entry) => entry.linkname === 'pubmed_pmc')?.links
+  return links?.[0] ? `PMC${links[0]}` : null
+}
+
 export async function pmidToPmcid(pmid) {
-  const data = await getJson(`${IDCONV}/?ids=${encodeURIComponent(pmid)}&format=json`)
-  return data?.records?.[0]?.pmcid ?? null
+  const url = withNcbiParams(`${EUTILS}/elink.fcgi?dbfrom=pubmed&db=pmc&linkname=pubmed_pmc&retmode=json&id=${encodeURIComponent(pmid)}`)
+  return pmcidFromElink(await getJson(url))
 }
 
 function nodeText(node) {

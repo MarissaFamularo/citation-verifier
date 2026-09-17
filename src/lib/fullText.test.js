@@ -15,3 +15,9 @@ test('pickOaLink prefers a direct PDF, keeps landing-page-only OA, honest isPdf 
   assert.equal(pickOaLink({ is_oa: true, best_oa_location: null }), null)
   assert.equal(pickOaLink(null), null)
 })
+
+test('pmcidFromElink reads the PMC id from an elink answer, or null when there is none', async () => {
+  const { pmcidFromElink } = await import('./fullText.js')
+  assert.equal(pmcidFromElink({ linksets: [{ linksetdbs: [{ linkname: 'pubmed_pmc_refs', links: ['1'] }, { linkname: 'pubmed_pmc', links: ['10991271'] }] }] }), 'PMC10991271')
+  assert.equal(pmcidFromElink({ linksets: [{ ids: ['1'] }] }), null)
+})

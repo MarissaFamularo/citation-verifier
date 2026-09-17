@@ -128,7 +128,7 @@ export default function App() {
           <button className="btn mt-2" disabled={busy || !pasted.trim()} onClick={() => importText(pasted, 'pasted-manuscript.txt')}>Read pasted text</button>
         </details>
         <p className="text-xs text-stone-500">
-          Nothing is uploaded to this site. The manuscript stays in your browser; citing sentences and the cited papers' text are sent to Anthropic and TypeSafe under your own keys. Check a journal's confidentiality rules before using this on a manuscript under peer review.
+          Nothing is stored by this site. The manuscript is read in your browser; citing sentences and passages from the cited papers are sent to Anthropic and TypeSafe under your own keys (TypeSafe requests are relayed through this site's host, which keeps nothing). Check a journal's confidentiality rules before using this on a manuscript under peer review.
         </p>
       </section>
 

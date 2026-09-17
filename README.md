@@ -34,7 +34,10 @@ Either model works on its own; with both, Jev scores the quote Claude proved.
 
 ## Privacy
 
-There is no server and no database. The manuscript is read in your browser.
+There is no database and no application server. The manuscript is read in your
+browser. TypeSafe's API does not accept browser requests, so those calls are
+relayed by a stateless rewrite on the host (`netlify.toml`; the Vite proxy in
+development) that stores and logs nothing.
 Citing sentences and cited-paper text go to Anthropic and TypeSafe under **your
 own API keys**, which are kept in browser storage only (cleared when the tab
 closes unless you tick "remember"). A review is saved as a JSON file you
