@@ -42,6 +42,9 @@ There is no database and no application server. The manuscript is read in your
 browser. TypeSafe's API does not accept browser requests, so those calls are
 relayed by a stateless rewrite on the host (`netlify.toml`; the Vite proxy in
 development) that stores and logs nothing.
+The live site keeps an anonymous usage count (`netlify/functions/count.mts`):
+the day, the event (page opened, manuscript read, check started) and the site
+the visitor came from. No IP address, cookie, visitor id or manuscript content.
 Citing sentences and cited-paper text go to Anthropic and TypeSafe under **your
 own API keys**, which are kept in browser storage only (cleared when the tab
 closes unless you tick "remember"). A review is saved as a JSON file you

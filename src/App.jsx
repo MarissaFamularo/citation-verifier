@@ -7,6 +7,7 @@ import { sourceFromPdf } from './lib/fullText.js'
 import { checkRow, createSourceCache, importManuscript, paperKey } from './lib/pipeline.js'
 import { parseReviewFile, rowsToCsv, serializeReview, setDecision, summarize } from './lib/review.js'
 import { hasTypesafeKey } from './lib/typesafe.js'
+import { countEvent } from './lib/usage.js'
 
 const CHECK_CONCURRENCY = 4
 
@@ -89,6 +90,7 @@ export default function App() {
       })
       setFileName(name)
       setRows(outcome.rows)
+      countEvent('import')
     })
   }
 
@@ -118,6 +120,7 @@ export default function App() {
   // citing the same paper share one fetched source. Kept modest so PubMed's
   // 3-requests-a-second limit (without an NCBI key) is not tripped.
   function checkRows(targets) {
+    countEvent('check')
     return run(async (signal) => {
       let done = 0
       const queue = [...targets]
@@ -182,7 +185,7 @@ export default function App() {
           <button className="btn mt-2" disabled={busy || !pasted.trim()} onClick={() => importText(pasted, 'pasted-manuscript.txt')}>Read pasted text</button>
         </details>
         <p className="text-xs text-stone-500">
-          Nothing is stored by this site. The manuscript is read in your browser; citing sentences and passages from the cited papers are sent to Anthropic and TypeSafe under your own keys (TypeSafe requests are relayed through this site's host, which keeps nothing). Check a journal's confidentiality rules before using this on a manuscript under peer review.
+          Nothing about you or your manuscript is stored by this site; it keeps only an anonymous count of visits and checks. The manuscript is read in your browser; citing sentences and passages from the cited papers are sent to Anthropic and TypeSafe under your own keys (TypeSafe requests are relayed through this site's host, which keeps nothing). Check a journal's confidentiality rules before using this on a manuscript under peer review.
         </p>
       </section>
 
