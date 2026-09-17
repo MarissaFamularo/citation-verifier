@@ -115,7 +115,10 @@ export default function App() {
   return (
     <main className="mx-auto max-w-5xl space-y-5 px-4 py-8">
       <header>
-        <h1 className="text-2xl font-semibold">Citation Verifier</h1>
+        <h1 className="text-2xl font-semibold">
+          <a className="underline decoration-teal-600 decoration-2 underline-offset-4 hover:text-teal-700 dark:hover:text-teal-400" href="https://papertrellis.com" target="_blank" rel="noreferrer">Paper Trellis</a>
+          {' '}Citation Verifier
+        </h1>
         <p className="mt-1 text-sm text-stone-600 dark:text-stone-400">
           Does each cited paper actually support the sentence that cites it? Upload a manuscript, get a model-checked table, and record your own verdict on every citation.
         </p>
@@ -182,7 +185,8 @@ export default function App() {
         </section>
       )}
       <footer className="border-t border-stone-200 pt-4 text-xs text-stone-500 dark:border-stone-800">
-        Built by <a className="underline" href="https://www.marissafamularo.com" target="_blank" rel="noreferrer">Marissa Famularo</a>
+        Part of <a className="underline" href="https://papertrellis.com" target="_blank" rel="noreferrer">Paper Trellis</a>, which tracks research projects from idea to publication
+        {' · '}Built by <a className="underline" href="https://www.marissafamularo.com" target="_blank" rel="noreferrer">Marissa Famularo</a>
         {' · '}<a className="underline" href="https://github.com/MarissaFamularo/citation-verifier" target="_blank" rel="noreferrer">Source on GitHub</a>
         {' · '}Model verdicts are a triage aid, not a finding.
       </footer>

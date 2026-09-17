@@ -1,4 +1,6 @@
-# Citation Verifier
+# Paper Trellis Citation Verifier
+
+A free, standalone tool from [Paper Trellis](https://papertrellis.com).
 
 Does the paper a manuscript cites actually support the sentence that cites it?
 
