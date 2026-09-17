@@ -2,7 +2,7 @@
 
 A free, standalone tool from [Paper Trellis](https://papertrellis.com).
 
-**Try it: https://papertrellis-citation-verifier.netlify.app**
+**Try it: https://verify.papertrellis.com**
 
 Does the paper a manuscript cites actually support the sentence that cites it?
 
