@@ -7,6 +7,8 @@ import { checkRow, createSourceCache, importManuscript } from './lib/pipeline.js
 import { parseReviewFile, rowsToCsv, serializeReview, setDecision, summarize } from './lib/review.js'
 import { hasTypesafeKey } from './lib/typesafe.js'
 
+const CHECK_CONCURRENCY = 4
+
 const FILTERS = {
   all: () => true,
   attention: (row) => row.sentence && (row.error || row.claude?.verdict === 'refuted' || row.claude?.verdict === 'flagged' || (row.jev && (row.jev.relation !== 'supports' || row.jev.needsReview))),
@@ -90,15 +92,23 @@ export default function App() {
     }
   }
 
+  // Several rows at a time: each check is mostly waiting on a model, and rows
+  // citing the same paper share one fetched source. Kept modest so PubMed's
+  // 3-requests-a-second limit (without an NCBI key) is not tripped.
   function checkRows(targets) {
     return run(async (signal) => {
       let done = 0
-      for (const target of targets) {
-        if (signal.aborted) break
-        setStatus(`Checking citations… ${done}/${targets.length}`)
-        patchRow(await checkRow(target, { getSource, signal }))
-        done += 1
+      const queue = [...targets]
+      const worker = async () => {
+        while (queue.length && !signal.aborted) {
+          const target = queue.shift()
+          patchRow(await checkRow(target, { getSource, signal }))
+          done += 1
+          setStatus(`Checking citations… ${done}/${targets.length}`)
+        }
       }
+      setStatus(`Checking citations… 0/${targets.length}`)
+      await Promise.all(Array.from({ length: Math.min(CHECK_CONCURRENCY, targets.length) }, worker))
     })
   }
 
@@ -151,8 +161,8 @@ export default function App() {
               <option value="attention">Needs attention</option>
               <option value="unreviewed">Not yet reviewed</option>
             </select>
-            <button className="btn btn-primary" disabled={busy || !canCheck} title={canCheck ? '' : 'Add an API key first'} onClick={() => checkRows(rows.filter((row) => row.sentence && !row.claude && !row.jev))}>
-              Check all unchecked
+            <button className="btn btn-primary" disabled={busy || !canCheck} title={canCheck ? '' : 'Add an API key first'} onClick={() => checkRows(rows.filter((row) => row.sentence && row.paper && !row.claude && !row.jev))}>
+              Check all unchecked ({rows.filter((row) => row.sentence && row.paper && !row.claude && !row.jev).length})
             </button>
             <button className="btn" onClick={() => download(`${baseName}.review.json`, serializeReview({ fileName, rows }), 'application/json')}>Save review</button>
             <button className="btn" onClick={() => download(`${baseName}.citations.csv`, rowsToCsv(rows), 'text/csv')}>Export CSV</button>
