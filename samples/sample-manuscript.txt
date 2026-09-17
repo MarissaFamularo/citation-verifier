@@ -1,0 +1,12 @@
+Revascularization strategy in chronic limb-threatening ischemia: a sample manuscript
+
+Introduction
+Chronic limb-threatening ischemia carries a high risk of amputation and death. In patients with an adequate great saphenous vein, surgical bypass first resulted in fewer major adverse limb events or deaths than endovascular therapy first [1]. In contrast, a UK trial found that a best endovascular treatment first strategy was associated with better amputation-free survival than vein bypass first [2].
+
+Discussion
+Endovascular repair of abdominal aortic aneurysm has an early survival benefit over open repair, but this advantage is lost in later follow-up [3]. Statin therapy eliminates the risk of amputation after bypass surgery [1].
+
+References
+1. Farber A, Menard MT, Conte MS, et al. Surgery or Endovascular Therapy for Chronic Limb-Threatening Ischemia. N Engl J Med. 2022;387(25):2305-2316. doi:10.1056/NEJMoa2207899
+2. Bradbury AW, Moakes CA, Popplewell M, et al. A vein bypass first versus a best endovascular treatment first revascularisation strategy for patients with chronic limb threatening ischaemia (BASIL-2). Lancet. 2023;401(10390):1798-1809. doi:10.1016/S0140-6736(23)00462-2
+3. Patel R, Sweeting MJ, Powell JT, Greenhalgh RM. Endovascular versus open repair of abdominal aortic aneurysm in 15-years' follow-up of the UK endovascular aneurysm repair trial 1 (EVAR trial 1). Lancet. 2016;388(10058):2366-2374. doi:10.1016/S0140-6736(16)31135-7

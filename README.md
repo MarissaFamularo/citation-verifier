@@ -1,0 +1,68 @@
+# Citation Verifier
+
+Does the paper a manuscript cites actually support the sentence that cites it?
+
+Upload a manuscript. The tool pulls out the reference list, pairs every citing
+sentence with the reference it cites, fetches each cited paper, and checks the
+pair two ways. You then record your own verdict — accept, reject, or other,
+with notes — on every citation, and export the table.
+
+Built for peer reviewers and authors in biomedicine (papers are matched through
+PubMed).
+
+## How a citation is checked
+
+1. **Code** reads the .docx, splits off the reference list, and matches citation
+   markers (`[12]`, superscripts, `(12)`, ranges, author–year) to sentences.
+2. **Code** matches each reference to PubMed by DOI, PMID, or title, then fetches
+   open-access full text from PMC when it exists, otherwise the abstract. Every
+   result says which one was checked — "not in the abstract" is a much weaker
+   finding than "not in the paper".
+3. **Claude** proposes a verdict and the verbatim passage that backs it. The app
+   then proves that passage exists in the fetched text; a quote it cannot find is
+   discarded and the citation is flagged, never shown as supported. Numbers in
+   the citing sentence are checked against the paper in code.
+4. **Jev** ([TypeSafe](https://typesafe.ai)'s System One model) reads the sentence
+   next to that passage and returns a probability for *supports / contradicts /
+   says nothing*. P(supports) is the reliability mark; low confidence means Jev
+   itself is unsure.
+5. **You** decide. Model output never overwrites a human verdict.
+
+Either model works on its own; with both, Jev scores the quote Claude proved.
+
+## Privacy
+
+There is no server and no database. The manuscript is read in your browser.
+Citing sentences and cited-paper text go to Anthropic and TypeSafe under **your
+own API keys**, which are kept in browser storage only (cleared when the tab
+closes unless you tick "remember"). A review is saved as a JSON file you
+download and can re-open later.
+
+Manuscripts under peer review are confidential. Check the journal's policy and
+each provider's data terms before using this on one.
+
+## Run it
+
+```bash
+npm install
+cp .env.example .env.local   # set VITE_CONTACT_EMAIL (used for Unpaywall lookups)
+npm run dev
+```
+
+`npm test` runs the unit tests; `samples/sample-manuscript.txt` is a tiny
+manuscript with one deliberately wrong citation to try it on.
+
+You need an [Anthropic API key](https://console.anthropic.com) and/or a
+[TypeSafe API key](https://console.typesafe.ai). An NCBI key is optional and
+speeds up PubMed lookups.
+
+## Limits
+
+- PDF manuscripts are not read yet — use the .docx or paste the text.
+- Paywalled papers are checked against the abstract only.
+- Model verdicts are a triage aid, not a finding. Thresholds have not yet been
+  validated on a labeled set of biomedical citations.
+
+## License
+
+MIT

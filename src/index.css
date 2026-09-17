@@ -1,0 +1,10 @@
+@import "tailwindcss";
+
+:root { color-scheme: light dark; }
+body { @apply bg-stone-50 text-stone-900 antialiased dark:bg-stone-950 dark:text-stone-100; }
+.panel { @apply rounded-lg border border-stone-200 bg-white dark:border-stone-800 dark:bg-stone-900; }
+.btn { @apply inline-flex items-center gap-1 rounded-md border border-stone-300 px-3 py-1.5 text-sm font-medium hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-stone-700 dark:hover:bg-stone-800; }
+.btn-primary { @apply border-teal-700 bg-teal-700 text-white hover:bg-teal-800 dark:hover:bg-teal-600; }
+.field { @apply w-full rounded-md border border-stone-300 bg-white px-2 py-1.5 text-sm dark:border-stone-700 dark:bg-stone-950; }
+.label { @apply text-xs font-semibold uppercase tracking-wide text-stone-500 dark:text-stone-400; }
+mark { @apply rounded bg-amber-200 px-0.5 text-stone-900; }
