@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { locateQuote } from '../lib/sourceLocate.js'
 import { DECISIONS } from '../lib/review.js'
+import { cleanSentence } from '../lib/typesafe.js'
 
 const VERDICT_STYLE = {
   supported: 'bg-teal-100 text-teal-900 dark:bg-teal-900/40 dark:text-teal-200',
@@ -42,12 +43,12 @@ export default function ReviewRow({ row, busy, canCheck, getSource, onCheck, onD
         {paper
           ? <a className="underline decoration-stone-400" href={paper.pmid ? `https://pubmed.ncbi.nlm.nih.gov/${paper.pmid}/` : `https://doi.org/${paper.doi}`} target="_blank" rel="noreferrer">{paper.title}</a>
           : <span className="text-stone-600 dark:text-stone-400">{row.referenceRaw}</span>}
-        {!paper && <Badge className={VERDICT_STYLE.flagged}>not found in PubMed — check it exists</Badge>}
+        {!paper && <Badge className={VERDICT_STYLE.flagged}>not matched in PubMed — check this one by hand</Badge>}
         {row.section && <span className="text-xs text-stone-500">{row.section}</span>}
       </div>
 
       {row.sentence
-        ? <blockquote className="border-l-2 border-stone-300 pl-3 text-sm dark:border-stone-700">{row.sentence}</blockquote>
+        ? <blockquote className="border-l-2 border-stone-300 pl-3 text-sm dark:border-stone-700" title={row.sentence}>{cleanSentence(row.sentence)}</blockquote>
         : <p className="text-sm text-stone-500">This reference is listed but no sentence in the text cites it.</p>}
 
       {row.sentence && (

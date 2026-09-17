@@ -392,3 +392,31 @@ test('citationMatchUpdates writes only real changes and clears returning sentenc
   assert.equal(updates[1].manuscript_match.checked_at, '2026-08-24T00:00:00Z')
   assert.equal(updates[2].manuscript_match.current_sentence, 'new')
 })
+
+// --- PDF-shaped manuscripts ---------------------------------------------------
+
+test('splitManuscript merges a main and a Methods reference list and keeps the text between them in the body', () => {
+  const { body, referenceText } = splitManuscript([
+    'Intro sentence^{1}.', 'References', '1. First ref. 2020.', '2. Second ref. 2021.',
+    'Publisher’s note Springer stays neutral.', 'Methods', 'We used a tool^{3}.',
+    'References', '3. Third ref. 2022.',
+  ].join('\n'))
+  assert.deepEqual(numberReferenceEntries(referenceText).map((entry) => entry.number), [1, 2, 3])
+  assert.ok(body.includes('We used a tool') && body.includes('Publisher’s note'))
+  assert.ok(!body.includes('First ref'))
+})
+
+test('splitManuscript keeps hard-wrapped continuation lines with their entry', () => {
+  const { referenceText } = splitManuscript('Body text [1].\nReferences\n1. Smith J. A long\ntitle wraps. 2020.\n2. Lee K. Another\nwrapped one. 2021.')
+  assert.deepEqual(numberReferenceEntries(referenceText).map((entry) => entry.raw), ['Smith J. A long title wraps. 2020.', 'Lee K. Another wrapped one. 2021.'])
+})
+
+test('marked superscripts switch off digit guessing, and "(ref. N)" counts as a citation', () => {
+  const references = [1, 2, 3, 4].map((number) => ({ number, raw: `Ref ${number}` }))
+  const body = 'We evaluated MIRA-v2. Agents help^{1}. Trust matters^{3,4}. Reliance varies^{1}. We used GLM-5 (ref. 2) as well. See Fig. 3 for details^{4}.'
+  const { byNumber } = extractManuscriptCitations(body, references)
+  assert.deepEqual([...byNumber.keys()].sort(), [1, 2, 3, 4])
+  assert.ok(byNumber.get(2).every((citation) => citation.sentence.includes('GLM-5 (ref. 2) as well.')))
+  assert.ok(!byNumber.get(2).some((citation) => citation.sentence.includes('MIRA-v2')))
+  assert.ok(byNumber.get(4).some((citation) => citation.sentence.startsWith('See Fig. 3 for details')))
+})

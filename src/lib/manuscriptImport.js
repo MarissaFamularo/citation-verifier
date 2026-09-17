@@ -153,13 +153,16 @@ export async function readManuscriptFile(file) {
     throw new Error('Old .doc files cannot be read here — save the manuscript as .docx, or paste its text.')
   }
   if (name.endsWith('.pdf')) {
-    throw new Error('PDFs cannot be read here — upload the .docx, or paste the manuscript text.')
+    const { extractPdfText } = await import('./pdfText.js')
+    return extractPdfText(await file.arrayBuffer())
   }
   return file.text()
 }
 
 // --- body / reference-list split ---------------------------------------------
 
+const SECTION_HEADING_RE = /^\s*(?:\d+[.)]?\s*)?(abstract|introduction|background|methods|materials and methods|patients and methods|results|discussion|conclusion|conclusions|limitations|case report|case presentation)\s*:?\s*$/i
+const ENTRY_NUMBER_RE = /^\s*(?:\[(\d{1,3})\]|(\d{1,3})[.)])\s+/
 const REFERENCE_HEADING_RE = /^\s*(?:\d+[.)]?\s*)?(references|bibliography|literature cited|works cited|reference list)\s*:?\s*$/i
 
 export function splitManuscript(text) {
@@ -169,15 +172,45 @@ export function splitManuscript(text) {
     throw new Error(`That manuscript is too long (${manuscript.length.toLocaleString()} characters) to read here.`)
   }
   const lines = manuscript.split('\n')
-  let headingLine = -1
-  for (let i = lines.length - 1; i >= 0; i -= 1) {
-    if (REFERENCE_HEADING_RE.test(lines[i])) { headingLine = i; break }
-  }
-  if (headingLine === -1) {
+  const headings = []
+  lines.forEach((line, index) => { if (REFERENCE_HEADING_RE.test(line)) headings.push(index) })
+  if (!headings.length) {
     throw new Error('No reference list was found — the manuscript needs a heading such as "References" or "Bibliography" above its reference list.')
   }
-  const body = lines.slice(0, headingLine).join('\n').trim()
-  const referenceText = lines.slice(headingLine + 1).join('\n').trim()
+  // Journals may print more than one list (main text, then Methods). A
+  // numbered list ends at the first line that does not start an entry, so the
+  // text between and after the lists stays in the body. An unnumbered list
+  // runs to the next References heading or the end, as before.
+  const inReferences = new Array(lines.length).fill(false)
+  headings.forEach((heading, position) => {
+    const limit = headings[position + 1] ?? lines.length
+    let first = heading + 1
+    while (first < limit && !lines[first].trim()) first += 1
+    const numbered = first < limit && ENTRY_NUMBER_RE.test(lines[first])
+    inReferences[heading] = true
+    if (!numbered) {
+      for (let i = heading + 1; i < limit; i += 1) inReferences[i] = true
+      return
+    }
+    let lastEntry = first
+    let wrapped = false
+    for (let i = first; i < limit; i += 1) {
+      if (ENTRY_NUMBER_RE.test(lines[i])) lastEntry = i
+    }
+    for (let i = first; i < lastEntry; i += 1) if (lines[i].trim() && !ENTRY_NUMBER_RE.test(lines[i])) wrapped = true
+    // Entries hard-wrapped over several lines: the last entry keeps its
+    // continuation lines, up to the next blank line.
+    let end = lastEntry
+    if (wrapped) {
+      while (end + 1 < limit && end - lastEntry < 4 && lines[end + 1].trim() && !SECTION_HEADING_RE.test(lines[end + 1])) end += 1
+    }
+    for (let i = heading + 1; i <= end; i += 1) inReferences[i] = true
+  })
+  const body = lines.filter((line, index) => !inReferences[index]).join('\n').trim()
+  const referenceText = lines
+    .filter((line, index) => inReferences[index] && !headings.includes(index))
+    .join('\n')
+    .trim()
   if (!referenceText) throw new Error('The References heading was found, but no references follow it.')
   if (!body) throw new Error('No manuscript text was found above the reference list.')
   return { body, referenceText }
@@ -185,7 +218,6 @@ export function splitManuscript(text) {
 
 // --- reference entries, numbering preserved ----------------------------------
 
-const ENTRY_NUMBER_RE = /^\s*(?:\[(\d{1,3})\]|(\d{1,3})[.)])\s+/
 
 // Split the reference section into entries and keep each entry's number.
 // Printed numbers win; a list without printed numbers (Word's auto-numbered
@@ -340,7 +372,6 @@ export async function gatherManuscriptReferences(referenceText) {
 
 // --- citing sentences --------------------------------------------------------
 
-const SECTION_HEADING_RE = /^\s*(?:\d+[.)]?\s*)?(abstract|introduction|background|methods|materials and methods|patients and methods|results|discussion|conclusion|conclusions|limitations|case report|case presentation)\s*:?\s*$/i
 
 // Break after terminal punctuation (plus trailing quotes/brackets and any
 // glued superscript citation digits) when the next word starts a sentence.
@@ -348,12 +379,25 @@ const SECTION_HEADING_RE = /^\s*(?:\d+[.)]?\s*)?(abstract|introduction|backgroun
 // away from its citing sentence.
 const SENTENCE_BREAK_RE = /([.?!][”’"')\]]*(?:\d{1,3}(?:\s*[,–—-]\s*\d{1,3})*)?(?:\^\{[^}]*\})?)\s+(?=[A-Z0-9“"‘])/g
 
+// Abbreviations whose period is not a sentence end: always ("vs.", "e.g."),
+// or when a number follows ("Fig. 2", "(ref. 29)", "no. 4").
+const ABBREVIATION_END_RE = /(?:\b(?:vs|e\.g|i\.e|cf|approx)\.|\((?:e\.g|i\.e)\.)$/i
+const NUMBERED_ABBREVIATION_END_RE = /\b(?:refs?|figs?|eqs?|nos?|tables?|supplementary (?:figs?|tables?))\.$/i
+
 export function splitSentences(text) {
-  return String(text ?? '')
+  const pieces = String(text ?? '')
     .replace(SENTENCE_BREAK_RE, '$1\u0000')
     .split('\u0000')
     .map((sentence) => sentence.trim())
     .filter(Boolean)
+  const sentences = []
+  for (const piece of pieces) {
+    const last = sentences[sentences.length - 1]
+    const joins = last && (ABBREVIATION_END_RE.test(last) || (NUMBERED_ABBREVIATION_END_RE.test(last) && /^\d/.test(piece)))
+    if (joins) sentences[sentences.length - 1] = `${last} ${piece}`
+    else sentences.push(piece)
+  }
+  return sentences
 }
 
 export function splitBodySentences(body) {
@@ -402,6 +446,7 @@ const SUPERSCRIPT_CITE_RE = /[A-Za-z”’"')\]]([.,;:])(\d{1,3}(?:\s*[,–—-]
 // the other way a flattened superscript reads: "…on duplex or CT1." /
 // "…(3.7% vs 5.3%)4,5."
 const TRAILING_SUP_RE = /(?<=[A-Za-z)\]”’"'])(\d{1,3}(?:\s*[,–—-]\s*\d{1,3})*)(?=[.,;:?!])/g
+const REF_WORD_CITE_RE = /\(refs?\.\s*(\d{1,3}(?:\s*[,;–—-]\s*\d{1,3})*)\)/gi
 // Words whose trailing number is data, not a citation.
 const NON_CITE_WORD_RE = /\b(?:fig|figure|figures|table|tables|eq|equation|ref|reference|no|nos|v|vs|vol|chapter|section|version|day|week|month|year|grade|type|stage|phase|class)\.?$/i
 
@@ -439,7 +484,14 @@ export function detectNumericMarkers(sentence, maxNumber) {
 
   for (const match of sentence.matchAll(MARKED_SUP_RE)) {
     const numbers = keep(expandNumberList(match[1]))
-    if (numbers.length) found.push({ style: 'superscript', numbers, marker: `^${match[1].replace(/\s+/g, '')}` })
+    if (numbers.length) found.push({ style: 'superscript', marked: true, numbers, marker: `^${match[1].replace(/\s+/g, '')}` })
+  }
+  // "(ref. 29)" / "(refs. 3,4)" — how journals cite where a superscript would
+  // read as part of a number or name ("GLM-5 (ref. 37)"). Unambiguous, so it
+  // counts as a marked superscript.
+  for (const match of sentence.matchAll(REF_WORD_CITE_RE)) {
+    const numbers = keep(expandNumberList(match[1]))
+    if (numbers.length) found.push({ style: 'superscript', marked: true, numbers, marker: match[0] })
   }
   for (const match of sentence.matchAll(SUPERSCRIPT_CITE_RE)) {
     const before = sentence.slice(0, match.index + 1)
@@ -509,6 +561,14 @@ export function extractManuscriptCitations(body, references) {
     numeric: detectNumericMarkers(sentence, maxNumber),
     authorYear: detectAuthorYearMarkers(sentence, references),
   }))
+
+  // A manuscript whose superscripts arrived explicitly marked (.docx runs, PDF
+  // geometry) needs no guessing: glued digits there are data ("MIRA-v2."),
+  // so only the marked ones count.
+  const markedCount = perSentence.reduce((sum, item) => sum + item.numeric.filter((hit) => hit.marked).length, 0)
+  if (markedCount >= 3) {
+    for (const item of perSentence) item.numeric = item.numeric.filter((hit) => hit.style !== 'superscript' || hit.marked)
+  }
 
   const styleCounts = { bracket: 0, paren: 0, superscript: 0 }
   for (const item of perSentence) {

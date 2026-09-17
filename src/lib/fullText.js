@@ -15,10 +15,9 @@ import { fetchPubMedPapers } from './pubmed.js'
 const EUTILS = 'https://eutils.ncbi.nlm.nih.gov/entrez/eutils'
 const IDCONV = 'https://www.ncbi.nlm.nih.gov/pmc/tools/idconv/api/v1/articles'
 const UNPAYWALL = 'https://api.unpaywall.org/v2'
-// Unpaywall's politeness policy wants a contact email per request. Whoever
-// deploys this sets VITE_CONTACT_EMAIL; without one the open-access link
-// lookup is skipped (PubMed and PMC full text still work).
-const CONTACT_EMAIL = import.meta.env?.VITE_CONTACT_EMAIL || ''
+// Unpaywall's politeness policy wants a contact email per request. Not a
+// secret; a fork can point it at its own with VITE_CONTACT_EMAIL.
+const CONTACT_EMAIL = import.meta.env?.VITE_CONTACT_EMAIL || 'statupfordocs@gmail.com'
 
 function withNcbiParams(url) {
   let out = `${url}&tool=citation-verifier`

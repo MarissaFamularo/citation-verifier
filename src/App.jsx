@@ -117,13 +117,13 @@ export default function App() {
         <p className="label">Manuscript</p>
         <div className="flex flex-wrap items-center gap-2">
           <label className={`btn btn-primary ${busy ? 'pointer-events-none opacity-50' : ''}`}>
-            Upload .docx, .txt, or a saved review (.json)
-            <input type="file" className="hidden" accept=".docx,.txt,.md,.json,text/plain,application/json" onChange={onFile} disabled={busy} />
+            Upload .docx, .pdf, .txt, or a saved review (.json)
+            <input type="file" className="hidden" accept=".docx,.pdf,.txt,.md,.json,text/plain,application/json,application/pdf" onChange={onFile} disabled={busy} />
           </label>
           {fileName && <span className="text-sm text-stone-600 dark:text-stone-400">{fileName}</span>}
         </div>
         <details>
-          <summary className="cursor-pointer text-sm text-stone-600 dark:text-stone-400">…or paste the manuscript text</summary>
+          <summary className="cursor-pointer text-sm text-stone-600 dark:text-stone-400">…or paste the manuscript text (from Word — text copied out of a PDF loses its citation numbers; upload the PDF instead)</summary>
           <textarea className="field mt-2 h-32" value={pasted} onChange={(e) => setPasted(e.target.value)} placeholder="Full text including the References section" />
           <button className="btn mt-2" disabled={busy || !pasted.trim()} onClick={() => importText(pasted, 'pasted-manuscript.txt')}>Read pasted text</button>
         </details>
@@ -171,6 +171,11 @@ export default function App() {
           {!visible.length && <p className="text-sm text-stone-500">Nothing matches this filter.</p>}
         </section>
       )}
+      <footer className="border-t border-stone-200 pt-4 text-xs text-stone-500 dark:border-stone-800">
+        Built by <a className="underline" href="https://www.marissafamularo.com" target="_blank" rel="noreferrer">Marissa Famularo</a>
+        {' · '}<a className="underline" href="https://github.com/MarissaFamularo/citation-verifier" target="_blank" rel="noreferrer">Source on GitHub</a>
+        {' · '}Model verdicts are a triage aid, not a finding.
+      </footer>
     </main>
   )
 }

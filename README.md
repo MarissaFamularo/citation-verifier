@@ -12,7 +12,7 @@ PubMed).
 
 ## How a citation is checked
 
-1. **Code** reads the .docx, splits off the reference list, and matches citation
+1. **Code** reads the .docx or PDF, splits off the reference list(s), and matches citation
    markers (`[12]`, superscripts, `(12)`, ranges, author–year) to sentences.
 2. **Code** matches each reference to PubMed by DOI, PMID, or title, then fetches
    open-access full text from PMC when it exists, otherwise the abstract. Every
@@ -58,7 +58,8 @@ speeds up PubMed lookups.
 
 ## Limits
 
-- PDF manuscripts are not read yet — use the .docx or paste the text.
+- PDFs are read from the position of the text on the page (columns, real superscripts, running headers), which works on typeset journal PDFs and ordinary manuscript PDFs with selectable text. Scanned PDFs are not read. Text copy-pasted out of a PDF viewer is not reliable — upload the file.
+- References that are not in PubMed (guidelines, regulations, preprints, websites) are listed but cannot be checked automatically.
 - Paywalled papers are checked against the abstract only.
 - Model verdicts are a triage aid, not a finding. Thresholds have not yet been
   validated on a labeled set of biomedical citations.

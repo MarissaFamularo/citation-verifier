@@ -74,7 +74,7 @@ export function selectPassage(source, quote) {
 }
 
 // Marker removal leaves "risk ." behind; close the gap so Jev reads prose.
-function cleanSentence(sentence) {
+export function cleanSentence(sentence) {
   return stripCitationMarkers(String(sentence ?? '')).replace(/\s+([.,;:?!])/g, '$1').replace(/\s+/g, ' ').trim()
 }
 
