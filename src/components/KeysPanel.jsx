@@ -35,7 +35,7 @@ export default function KeysPanel({ onChange }) {
       <div className="mt-3 grid gap-3 sm:grid-cols-3">
         <label className="text-sm">Anthropic (Claude finds and proves the quote)
           <input type="password" autoComplete="off" className="field mt-1" value={anthropic} onChange={(e) => { setAnthropic(e.target.value); setSaved(false) }} />
-          <KeyHelp href="https://console.anthropic.com/settings/keys">Get a key: console.anthropic.com → API keys (paid per use; a long manuscript with many full-text papers can cost a few dollars)</KeyHelp>
+          <KeyHelp href="https://console.anthropic.com/settings/keys">Get a key: console.anthropic.com → API keys (paid per use)</KeyHelp>
         </label>
         <label className="text-sm">TypeSafe (Jev's reliability mark)
           <input type="password" autoComplete="off" className="field mt-1" value={typesafe} onChange={(e) => { setTypesafe(e.target.value); setSaved(false) }} />
