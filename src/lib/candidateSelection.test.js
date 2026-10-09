@@ -189,3 +189,17 @@ test('a transcription with no author still cannot pick a stranger', async (t) =>
   // The printed citation still names Schanzer first, so the 2021–2024 papers by others conflict.
   assert.equal(result.paper, null)
 })
+
+// --- the built-in sample ---------------------------------------------------------
+
+test('a citation that prints a shortened title still matches its DOI\'s full record', () => {
+  const raw = 'Bradbury AW, Moakes CA, Popplewell M, et al. A vein bypass first versus a best endovascular treatment first revascularisation strategy for patients with chronic limb threatening ischaemia (BASIL-2). Lancet. 2023;401(10390):1798-1809. doi:10.1016/S0140-6736(23)00462-2'
+  const record = {
+    title: 'A vein bypass first versus a best endovascular treatment first revascularisation strategy for patients with chronic limb threatening ischaemia who required an infra-popliteal, with or without an additional more proximal infra-inguinal revascularisation procedure to restore limb perfusion (BASIL-2): an open-label, randomised, multicentre, phase 3 trial.',
+    publicationDate: '2023 May 27',
+    authors: ['Bradbury AW', 'Moakes CA'],
+  }
+  assert.equal(scoreMatch({ raw, title: null }, record), 'match')
+  // The same long record behind a DOI printed in an unrelated citation is still refused.
+  assert.equal(scoreMatch({ raw: RAW, title: null }, record), 'reject')
+})

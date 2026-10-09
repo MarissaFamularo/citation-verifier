@@ -266,11 +266,23 @@ function printedWords(raw) {
     .replace(/\b(?:PMID|PMCID|doi)\s*:?\s*\S+/gi, ' '))
 }
 
-function contentContainment(rawText, title) {
+function contentContainment(rawText, title, { leading = Infinity } = {}) {
   const rawWords = new Set(printedWords(rawText))
-  const titleWords = contentWords(title)
+  const titleWords = contentWords(title).slice(0, leading)
   if (!rawWords.size || !titleWords.length) return 0
   return titleWords.filter((word) => rawWords.has(word)).length / titleWords.length
+}
+
+// Bibliographies often print a shortened title: "A vein bypass first versus
+// a best endovascular treatment first revascularisation strategy for
+// patients with chronic limb threatening ischaemia (BASIL-2)" for a record
+// whose full title runs on with the trial's design. The opening words of the
+// full title still appear in the citation.
+const LEADING_TITLE_WORDS = 8
+
+function printedTitleFits(rawText, title) {
+  return contentContainment(rawText, title) >= 0.5
+    || contentContainment(rawText, title, { leading: LEADING_TITLE_WORDS }) >= 0.8
 }
 
 // The fewest printed words that make a citation checkable. Below this the
@@ -369,9 +381,10 @@ function agreements(reference, paper) {
 export function scoreMatch(reference, paper) {
   if (!reference?.title) {
     if (printedWords(reference?.raw).length < PRINTED_WORDS_MIN) return 'check'
-    const content = contentContainment(reference?.raw, paper?.title)
-    if (content < 0.5 || matchConflicts(reference, paper).length) return 'reject'
-    return titleContainment(reference?.raw, paper?.title) >= 0.7 ? 'match' : 'check'
+    if (!printedTitleFits(reference?.raw, paper?.title) || matchConflicts(reference, paper).length) return 'reject'
+    const wholeTitle = titleContainment(reference?.raw, paper?.title) >= 0.7
+    const shortened = contentContainment(reference?.raw, paper?.title, { leading: LEADING_TITLE_WORDS }) >= 0.8 && agreements(reference, paper) >= 1
+    return wholeTitle || shortened ? 'match' : 'check'
   }
   const similarity = titleSimilarity(reference.title, paper?.title)
   if (similarity < 0.5 || matchConflicts(reference, paper).length) return 'reject'
