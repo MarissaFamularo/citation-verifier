@@ -246,14 +246,49 @@ export function titleContainment(rawText, title) {
   return present / titleWords.length
 }
 
+// Words that carry a title's meaning: no stopwords, no bare numbers.
+const TITLE_STOPWORDS = new Set('a an and are as at by during for from in into is its of on or than that the their to toward towards upon versus vs with within without'.split(' '))
+function contentWords(text) {
+  return normalizeTitle(text).split(' ').filter((word) => word && !TITLE_STOPWORDS.has(word) && !/^\d+$/.test(word))
+}
+
+// The printed citation with its identifiers and links removed — what is left
+// is authors, title, journal and pages: something to check a candidate against.
+function printedWords(raw) {
+  return contentWords(String(raw ?? '')
+    .replace(/https?:\/\/\S+/gi, ' ')
+    .replace(/\b10\.\d{4,9}\/\S+/g, ' ')
+    .replace(/\b(?:PMID|PMCID|doi)\s*:?\s*\S+/gi, ' '))
+}
+
+function contentContainment(rawText, title) {
+  const rawWords = new Set(printedWords(rawText))
+  const titleWords = contentWords(title)
+  if (!rawWords.size || !titleWords.length) return 0
+  return titleWords.filter((word) => rawWords.has(word)).length / titleWords.length
+}
+
+// The fewest printed words that make a citation checkable. Below this the
+// reference is a bare identifier and the candidate cannot be second-guessed.
+const PRINTED_WORDS_MIN = 4
+
 // 'match'  — add with confidence; 'check' — show the reviewer a caution badge;
 // 'reject' — wrong paper, keep looking. With no parsed title, verification
-// falls back to checking the resolved title against the raw citation text; a
-// bare-identifier paste has nothing to check against and stays 'check'.
+// falls back to checking the resolved title against the raw citation text: a
+// candidate whose title is mostly absent from a printed citation is a
+// different paper (a mangled or misread identifier), and is rejected rather
+// than attached with a caution. A bare-identifier paste has nothing to check
+// against and stays 'check'.
 export function scoreMatch(reference, paper) {
   if (!reference?.title) {
+    if (printedWords(reference?.raw).length < PRINTED_WORDS_MIN) return 'check'
+    const content = contentContainment(reference?.raw, paper?.title)
+    if (content < 0.5) return 'reject'
     const containment = titleContainment(reference?.raw, paper?.title)
-    return containment >= 0.7 ? 'match' : 'check'
+    const refYear = extractYear(String(reference?.raw ?? '').replace(/\b10\.\d{4,9}\/\S+/g, ' '))
+    const paperYear = extractYear(paper?.publicationDate ?? paper?.publication_date)
+    const yearOk = refYear === null || paperYear === null || Math.abs(refYear - paperYear) <= 1
+    return containment >= 0.7 && yearOk ? 'match' : 'check'
   }
   const similarity = titleSimilarity(reference.title, paper?.title)
   const refYear = reference.year ?? null
@@ -325,7 +360,13 @@ function lookupFailureMessage(err) {
 // A lookup that errors out (rather than answering "not found") is reported as
 // method 'error' so the UI can offer a retry instead of claiming "not found".
 export async function resolveReference(reference, { signal } = {}) {
+  if (reference.parseWarning) {
+    return { reference, paper: null, method: 'unparsed', confidence: 'none', warning: reference.parseWarning }
+  }
   let lookupError = null
+  // Printed identifiers that led to a different paper — shown to the
+  // reviewer so a misprinted or misread identifier is visible, not silent.
+  const rejected = []
   if (reference.pmid) {
     try {
       const [paper] = await withRetry(() => fetchPubMedPapers([reference.pmid], { signal }), { signal })
@@ -334,6 +375,7 @@ export async function resolveReference(reference, { signal } = {}) {
         if (confidence !== 'reject') {
           return { reference, paper: shapePaper(paper), method: 'pmid', confidence }
         }
+        rejected.push({ via: `PMID ${reference.pmid}`, title: paper.title })
       }
     } catch (err) {
       if (err?.name === 'AbortError') throw err
@@ -348,6 +390,7 @@ export async function resolveReference(reference, { signal } = {}) {
         if (confidence !== 'reject') {
           return { reference, paper: shapePaper(resolved.paper), method: 'doi', confidence }
         }
+        rejected.push({ via: `DOI ${reference.doi}`, title: resolved.paper.title })
       }
     } catch (err) {
       if (err?.name === 'AbortError') throw err
@@ -390,19 +433,20 @@ export async function resolveReference(reference, { signal } = {}) {
   // Not in PubMed: preprints, conference papers, and non-biomedical journals
   // are looked up in OpenAlex — by arXiv id or DOI first, then by title.
   try {
-    const found = await resolveViaOpenAlex(reference, { signal })
+    const found = await resolveViaOpenAlex(reference, { signal, rejected })
     if (found) return found
   } catch (err) {
     if (err?.name === 'AbortError') throw err
     lookupError = lookupError || err
   }
+  const extra = rejected.length ? { rejected } : {}
   if (lookupError) {
-    return { reference, paper: null, method: 'error', confidence: 'none', error: lookupFailureMessage(lookupError) }
+    return { reference, paper: null, method: 'error', confidence: 'none', error: lookupFailureMessage(lookupError), ...extra }
   }
-  return { reference, paper: null, method: 'none', confidence: 'none' }
+  return { reference, paper: null, method: 'none', confidence: 'none', ...extra }
 }
 
-async function resolveViaOpenAlex(reference, { signal } = {}) {
+async function resolveViaOpenAlex(reference, { signal, rejected = [] } = {}) {
   const arxivId = arxivIdFrom(reference.doi) || arxivIdFrom(reference.raw)
   const dois = [...new Set([arxivId ? arxivDoi(arxivId) : null, reference.doi].filter(Boolean))]
   for (const doi of dois) {
@@ -412,6 +456,7 @@ async function resolveViaOpenAlex(reference, { signal } = {}) {
     if (confidence !== 'reject') {
       return { reference, paper: shapePaper({ ...paper, arxivId: paper.arxivId || arxivId }), method: arxivId ? 'arxiv' : 'doi', confidence }
     }
+    if (!rejected.some((item) => item.title === paper.title)) rejected.push({ via: `DOI ${doi}`, title: paper.title })
   }
   if (!reference.title) return null
   const papers = await withRetry(() => searchOpenAlexByTitle(reference.title, { signal }), { signal })

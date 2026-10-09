@@ -162,7 +162,8 @@ export async function readManuscriptFile(file) {
 // --- body / reference-list split ---------------------------------------------
 
 const SECTION_HEADING_RE = /^\s*(?:\d+[.)]?\s*)?(abstract|introduction|background|methods|materials and methods|patients and methods|results|discussion|conclusion|conclusions|limitations|case report|case presentation)\s*:?\s*$/i
-const ENTRY_NUMBER_RE = /^\s*(?:\[(\d{1,3})\]|(\d{1,3})[.)])\s+/
+// "12." / "12)" / "[12]" — and "12.." as some publishers print it.
+const ENTRY_NUMBER_RE = /^\s*(?:\[(\d{1,3})\]|(\d{1,3})(?:\.\.?|\)))\s+/
 const REFERENCE_HEADING_RE = /^\s*(?:\d+[.)]?\s*)?(references|bibliography|literature cited|works cited|reference list)\s*:?\s*$/i
 
 export function splitManuscript(text) {
@@ -222,26 +223,99 @@ export function splitManuscript(text) {
 // Split the reference section into entries and keep each entry's number.
 // Printed numbers win; a list without printed numbers (Word's auto-numbered
 // lists lose them in the saved text) is numbered sequentially in order.
+//
+// In a printed list, a block that starts without a number is the tail of the
+// entry before it (an entry wrapped across a page or column break), never a
+// reference of its own — giving it the next free number would shift every
+// citation after it onto the wrong paper. An entry whose text still looks
+// like several references run together keeps a parseWarning, and is reported
+// unresolved instead of being looked up.
+export const REFERENCE_ENTRY_CHAR_CAP = 2000
+// "…595-603. 7. Maurel B, …" — an entry start (a later number, then a
+// surname and initials) inside an entry's text.
+const EMBEDDED_ENTRY_RE = /[.)\]]\s+(?:\[(\d{1,3})\]|(\d{1,3})(?:\.\.?|\)))\s+\p{Lu}[\p{L}'’-]+,?\s+\p{Lu}{1,3}[,.]/gu
+
+function looksMerged(entry) {
+  if (entry.raw.length > REFERENCE_ENTRY_CHAR_CAP) return true
+  for (const match of entry.raw.matchAll(EMBEDDED_ENTRY_RE)) {
+    if (!Number.isInteger(entry.number) || Number(match[1] ?? match[2]) > entry.number) return true
+  }
+  return false
+}
+
+// Text lost the line breaks between entries: cut where the NEXT number starts
+// an entry after a finished one. Only the very next number counts, and only
+// when that number is not printed as an entry of its own elsewhere.
+function splitRunOn(entry, printedNumbers) {
+  const out = [entry]
+  for (;;) {
+    const last = out[out.length - 1]
+    const next = last.number + 1
+    if (printedNumbers.has(next)) break
+    const re = new RegExp(`[.)\\]]\\s+(?:\\[${next}\\]|${next}(?:\\.\\.?|\\)))\\s+(?=\\p{Lu})`, 'u')
+    const match = last.raw.match(re)
+    if (!match) break
+    const cut = match.index + 1
+    out[out.length - 1] = { ...last, raw: last.raw.slice(0, cut).trim() }
+    out.push({ number: next, raw: last.raw.slice(cut + match[0].length - 1).trim() })
+    printedNumbers.add(next)
+  }
+  return out
+}
+
 export function numberReferenceEntries(referenceText) {
   const text = stripSuperscriptMarks(String(referenceText ?? '')).replace(/\r/g, '').trim()
   if (!text) return []
-  const numberedBlocks = text.split(/\n(?=\s*(?:\[\d{1,3}\]|\d{1,3}[.)])\s+)/)
+  const numberedBlocks = text.split(/\n(?=\s*(?:\[\d{1,3}\]|\d{1,3}(?:\.\.?|\)))\s+)/)
   const usePrinted = numberedBlocks.length > 1 || ENTRY_NUMBER_RE.test(text)
-  const blocks = usePrinted
-    ? numberedBlocks
-    : text.includes('\n\n')
-      ? text.split(/\n\s*\n/)
-      : text.split('\n')
-  const entries = []
-  for (const block of blocks) {
+  if (!usePrinted) {
+    const blocks = text.includes('\n\n') ? text.split(/\n\s*\n/) : text.split('\n')
+    const entries = []
+    for (const block of blocks) {
+      const raw = compact(block)
+      if (raw) entries.push({ number: entries.length + 1, raw })
+      if (entries.length >= REFERENCE_CAP) break
+    }
+    return entries
+  }
+
+  const printed = []
+  for (const block of numberedBlocks) {
     const match = block.match(ENTRY_NUMBER_RE)
-    const printed = match ? Number(match[1] ?? match[2]) : null
     const raw = compact(block.replace(ENTRY_NUMBER_RE, ''))
     if (!raw) continue
-    entries.push({ number: usePrinted && printed != null ? printed : entries.length + 1, raw })
+    if (match) {
+      printed.push({ number: Number(match[1] ?? match[2]), raw })
+    } else if (printed.length) {
+      const last = printed[printed.length - 1]
+      last.raw = compact(`${last.raw} ${raw}`)
+    } else {
+      // Text before the first numbered entry: kept for inspection, unnumbered
+      // entries cannot be cited by number, so it is flagged rather than guessed.
+      printed.push({ number: null, raw })
+    }
+  }
+  const printedNumbers = new Set(printed.map((entry) => entry.number).filter(Number.isInteger))
+  const entries = []
+  const seen = new Set()
+  for (const entry of printed.flatMap((item) => (Number.isInteger(item.number) ? splitRunOn(item, printedNumbers) : [item]))) {
+    const warnings = []
+    if (!Number.isInteger(entry.number)) {
+      warnings.push('text before the first numbered reference')
+    } else {
+      // Out-of-order numbers are left alone: multi-column lists are often
+      // read out of order, and the printed number is still the right one.
+      if (seen.has(entry.number)) warnings.push(`reference number ${entry.number} appears more than once`)
+      seen.add(entry.number)
+    }
+    if (looksMerged(entry)) {
+      warnings.push('this entry may contain more than one reference')
+    }
+    entries.push({ number: entry.number, raw: entry.raw, ...(warnings.length ? { parseWarning: warnings.join('; ') } : {}) })
     if (entries.length >= REFERENCE_CAP) break
   }
-  return entries
+  // An entry without a number cannot be attached to any citation.
+  return entries.filter((entry) => Number.isInteger(entry.number) || entry.parseWarning)
 }
 
 // --- printed identifiers (deterministic, no model) ---------------------------
@@ -315,6 +389,7 @@ export function cleanNumberedParse(parsed, entriesByNumber) {
     cleaned.push({
       number,
       raw: entry.raw,
+      ...(entry.parseWarning ? { parseWarning: entry.parseWarning } : {}),
       title,
       firstAuthor: compact(row?.firstAuthor) || null,
       journal: compact(row?.journal) || null,
@@ -341,23 +416,36 @@ export async function parseNumberedReferences(entries) {
 
 // True when at least one reference entry lacks a printed identifier, i.e. the
 // model (and therefore an API key) is needed to read the reference list.
+// Entries flagged as mis-split are reported, never transcribed.
 export function manuscriptNeedsModel(referenceText) {
   const entries = numberReferenceEntries(referenceText)
   return entries.length === 0 || entries.some((entry) => {
+    if (entry.parseWarning) return false
     const { pmid, doi } = entryIdentifiers(entry.raw)
     return !pmid && !doi
   })
 }
 
+function unresolvedEntry(entry) {
+  return { ...entry, title: null, firstAuthor: null, journal: null, year: null, pmid: null, doi: null }
+}
+
 // The full reference gather for a manuscript: printed identifiers first (no
 // model), then one transcription call for whatever lacks one. Every result
-// keeps its list number so citing sentences can be attached.
+// keeps its list number so citing sentences can be attached. Every entry
+// comes back, with its printed text: one the model could not read, or that
+// looks mis-split, is returned unresolved instead of being dropped.
 export async function gatherManuscriptReferences(referenceText) {
   const entries = numberReferenceEntries(referenceText)
   if (!entries.length) throw new Error('No references were recognized under the References heading.')
   const identified = []
+  const flagged = []
   const needModel = []
   for (const entry of entries) {
+    if (entry.parseWarning) {
+      flagged.push(unresolvedEntry(entry))
+      continue
+    }
     const { pmid, doi } = entryIdentifiers(entry.raw)
     if (pmid || doi) {
       identified.push({ ...entry, title: null, firstAuthor: null, journal: null, year: null, pmid, doi })
@@ -366,7 +454,10 @@ export async function gatherManuscriptReferences(referenceText) {
     }
   }
   const transcribed = needModel.length ? await parseNumberedReferences(needModel) : []
-  const references = [...identified, ...transcribed].sort((a, b) => a.number - b.number)
+  const transcribedNumbers = new Set(transcribed.map((ref) => ref.number))
+  const unread = needModel.filter((entry) => !transcribedNumbers.has(entry.number)).map(unresolvedEntry)
+  const references = [...identified, ...transcribed, ...unread, ...flagged]
+    .sort((a, b) => (a.number ?? Infinity) - (b.number ?? Infinity))
   return { references, usedModel: needModel.length > 0, entryCount: entries.length }
 }
 
@@ -377,7 +468,9 @@ export async function gatherManuscriptReferences(referenceText) {
 // glued superscript citation digits) when the next word starts a sentence.
 // "(" is deliberately NOT a sentence starter: it would split "et al. (2020)"
 // away from its citing sentence.
-const SENTENCE_BREAK_RE = /([.?!][”’"')\]]*(?:\d{1,3}(?:\s*[,–—-]\s*\d{1,3})*)?(?:\^\{[^}]*\})?)\s+(?=[A-Z0-9“"‘])/g
+// A bracketed citation printed after the period (".[3] Next…") belongs to
+// the sentence it follows.
+const SENTENCE_BREAK_RE = /([.?!][”’"')\]]*(?:\d{1,3}(?:\s*[,–—-]\s*\d{1,3})*)?(?:\^\{[^}]*\})?(?:\[\d{1,3}(?:\s*[,;–—-]\s*\d{1,3})*\])?)\s+(?=[A-Z0-9“"‘])/g
 
 // Abbreviations whose period is not a sentence end: always ("vs.", "e.g."),
 // or when a number follows ("Fig. 2", "(ref. 29)", "no. 4").

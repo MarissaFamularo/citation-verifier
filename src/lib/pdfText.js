@@ -9,7 +9,17 @@ export const PDF_PAGE_CAP = 80
 export function itemsFromTextContent(textContent) {
   return textContent.items
     .filter((item) => typeof item.str === 'string')
-    .map((item) => ({ str: item.str, x: item.transform[4], y: item.transform[5], w: item.width, h: item.height }))
+    .map((item) => ({
+      str: item.str,
+      x: item.transform[4],
+      y: item.transform[5],
+      w: item.width,
+      h: item.height,
+      // Rotated baseline (the matrix's b term): diagonal watermarks ("Journal
+      // Pre-proof", "DRAFT") and sideways labels. Skew alone (c) is a
+      // synthetic italic, which is body text.
+      rotated: Math.abs(item.transform[1]) > Math.abs(item.transform[0]) * 0.01,
+    }))
 }
 
 export async function extractPdfText(arrayBuffer) {

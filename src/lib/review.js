@@ -24,6 +24,10 @@ export function buildRows(references, byNumber, results = []) {
       referenceRaw: clean(reference.raw),
       paper: result?.paper || null,
       matchConfidence: result?.confidence || null,
+      // Why a reference was left unresolved: the entry looked mis-split, or a
+      // printed identifier pointed at a different paper and was refused.
+      parseWarning: reference.parseWarning || result?.warning || null,
+      rejectedCandidates: result?.rejected || [],
       sourceTier: null,
       claude: null,
       jev: null,
@@ -94,6 +98,7 @@ function csvCell(value) {
 const CSV_COLUMNS = [
   ['Ref #', (row) => row.refNumber],
   ['Reference', (row) => row.referenceRaw],
+  ['Reference warning', (row) => [row.parseWarning, ...(row.rejectedCandidates || []).map((item) => `${item.via} is a different paper: ${item.title}`)].filter(Boolean).join(' · ')],
   ['PMID', (row) => row.paper?.pmid || ''],
   ['DOI', (row) => row.paper?.doi || ''],
   ['Section', (row) => row.section || ''],

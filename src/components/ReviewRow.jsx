@@ -45,15 +45,25 @@ export default function ReviewRow({ row, busy, canCheck, getSource, onCheck, onA
   return (
     <article className="panel space-y-3 p-4">
       <div className="flex flex-wrap items-baseline gap-2 text-sm">
-        <span className="font-semibold">[{row.refNumber}]</span>
+        <span className="font-semibold">[{row.refNumber ?? '–'}]</span>
         {paper
           ? <a className="underline decoration-stone-400" href={paper.pmid ? `https://pubmed.ncbi.nlm.nih.gov/${paper.pmid}/` : paper.sourceUrl || `https://doi.org/${paper.doi}`} target="_blank" rel="noreferrer">{paper.title}</a>
           : <span className="text-stone-600 dark:text-stone-400">{row.referenceRaw}</span>}
-        {!paper && <Badge className={VERDICT_STYLE.flagged}>no matching paper found — check this one by hand</Badge>}
+        {!paper && row.parseWarning && <Badge className={VERDICT_STYLE.flagged}>reference not looked up — {row.parseWarning}; check it by hand</Badge>}
+        {!paper && !row.parseWarning && <Badge className={VERDICT_STYLE.flagged}>no matching paper found — check this one by hand</Badge>}
         {paper && !paper.pmid && <span className="text-xs text-stone-500">{paper.sourceType === 'arxiv' ? 'arXiv' : 'via OpenAlex'}</span>}
         {row.matchConfidence === 'check' && <Badge className={VERDICT_STYLE.flagged}>loose title match — confirm it is the right paper</Badge>}
         {row.section && <span className="text-xs text-stone-500">{row.section}</span>}
       </div>
+      {(row.rejectedCandidates || []).map((item) => (
+        <p key={item.via} className="text-xs text-amber-800 dark:text-amber-300">The printed {item.via} leads to a different paper (“{item.title}”), so it was not used.</p>
+      ))}
+      {paper && row.referenceRaw && (
+        <details className="text-xs text-stone-500">
+          <summary className="cursor-pointer">Reference as printed</summary>
+          <p className="mt-1">{row.referenceRaw}</p>
+        </details>
+      )}
 
       {row.sentence
         ? <blockquote className="border-l-2 border-stone-300 pl-3 text-sm dark:border-stone-700" title={row.sentence}>{cleanSentence(row.sentence)}</blockquote>

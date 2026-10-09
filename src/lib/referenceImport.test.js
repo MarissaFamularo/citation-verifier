@@ -99,8 +99,9 @@ test('scoreMatch accepts close titles, flags weak or year-shifted ones, rejects 
   assert.equal(scoreMatch(reference, { title: 'Endovascular repair outcomes', publicationDate: '2023 Dec' }), 'match')
   assert.equal(scoreMatch(reference, { title: 'Endovascular repair outcomes', publicationDate: '2020' }), 'check')
   assert.equal(scoreMatch(reference, { title: 'A completely unrelated cardiology paper', publicationDate: '2024' }), 'reject')
-  // No printed title means the match cannot be verified.
-  assert.equal(scoreMatch(parsedRef({ title: null }), { title: 'Whatever came back', publicationDate: '2024' }), 'check')
+  // No parsed title: the printed citation is the check, and a candidate whose
+  // title it does not contain is a different paper.
+  assert.equal(scoreMatch(parsedRef({ title: null }), { title: 'Whatever came back', publicationDate: '2024' }), 'reject')
 })
 
 const NUMBERED_PASTE = `1.  AbuRahma AF, Avgerinos ED, Chang RW, et al. Society for Vascular Surgery clinical
@@ -153,7 +154,8 @@ test('scoreMatch on an identifier-only reference uses the raw citation text', ()
   const raw = 'Kamtchum-Tatuene J. Prevalence of High-risk Plaques and Risk of Stroke. JAMA Neurol. 2020. doi:10.1001/jamaneurol.2020.2658'
   const reference = { raw, title: null, pmid: null, doi: '10.1001/jamaneurol.2020.2658', year: null }
   assert.equal(scoreMatch(reference, { title: 'Prevalence of High-risk Plaques and Risk of Stroke' }), 'match')
-  assert.equal(scoreMatch(reference, { title: 'A totally different resolved paper' }), 'check')
+  // A printed citation that does not contain the resolved title: wrong paper.
+  assert.equal(scoreMatch(reference, { title: 'A totally different resolved paper' }), 'reject')
   // A bare identifier has nothing to verify against — human checks.
   assert.equal(scoreMatch({ raw: '10.1001/jamaneurol.2020.2658', title: null }, { title: 'Whatever resolved' }), 'check')
 })

@@ -10,10 +10,13 @@
 //   - two-column pages are read column by column, so a reference number in
 //     its hanging indent stays on the line of the entry it numbers;
 //   - running headers/footers are dropped, hard-wrapped lines are rejoined and
-//     de-hyphenated, and headings / numbered reference entries start a new line.
+//     de-hyphenated, and headings / numbered reference entries start a new line;
+//   - manuscript line numbers (a margin column of counting integers) and
+//     rotated watermarks ("Journal Pre-proof") are dropped before any of that,
+//     so they never glue onto a sentence, a DOI, or a reference number.
 
 const SUP_TEXT_RE = /^[\d,;–—‐-]+$/
-const ENTRY_START_RE = /^(?:\[\d{1,3}\]|\d{1,3}[.)])\s+\S/
+const ENTRY_START_RE = /^(?:\[\d{1,3}\]|\d{1,3}(?:\.\.?|\)))\s+\S/
 const HEADING_RE = /^\s*(?:\d+[.)]?\s*)?(abstract|introduction|background|methods|online methods|materials and methods|patients and methods|results|discussion|conclusions?|limitations|references|bibliography|literature cited|works cited|reference list|acknowledge?ments|data availability|code availability|author contributions|competing interests|funding|supplementary (?:information|material)|additional information|extended data|online content|reporting summary|ethics statement)\s*:?\s*$/i
 
 function median(values) {
@@ -196,7 +199,9 @@ export function joinLines(lines, body) {
       // hyphens are real); a hyphenated word break loses its hyphen.
       const brokenLink = /(?:https?:\/\/|\b10\.\d{4,9}\/)\S*[/.\-_=]$/.test(last)
       const brokenWord = /[\p{L}]-$/u.test(last) && /^\p{Ll}/u.test(line.text)
-      out[out.length - 1] = brokenLink
+      // A numeric range broken at its dash ("1706-" / "1713.e1") keeps the dash.
+      const brokenRange = /\d[-–]$/.test(last) && /^\d/.test(line.text)
+      out[out.length - 1] = brokenLink || brokenRange
         ? last + line.text
         : brokenWord ? last.slice(0, -1) + line.text : `${last} ${line.text}`
     }
@@ -215,9 +220,112 @@ function unmarkAffiliations(text) {
   return listed / markers.length > 0.6 ? text.replace(/\^\{([^}]*)\}/g, '$1') : text
 }
 
-export function layoutToText(pages) {
-  const body = bodyHeight(pages)
+// Diagonal watermarks and sideways margin labels carry a rotation. They are
+// dropped unless rotated text is most of the page (a landscape table set
+// sideways), where it is the content.
+// Rotated text repeated on several pages is a watermark even on a page that
+// holds nothing else (a figure page).
+export function uprightItems(page, watermarks = new Set()) {
+  const items = page.items.filter((item) => item.str && item.str.trim() && !(item.rotated && watermarks.has(item.str.trim())))
+  const upright = items.filter((item) => !item.rotated)
+  const chars = (list) => list.reduce((sum, item) => sum + item.str.length, 0)
+  return { ...page, items: chars(upright) >= chars(items) * 0.5 ? upright : items }
+}
+
+function rotatedRepeats(pages) {
+  const counts = new Map()
+  for (const page of pages) {
+    for (const text of new Set(page.items.filter((item) => item.rotated && item.str.trim()).map((item) => item.str.trim()))) {
+      counts.set(text, (counts.get(text) || 0) + 1)
+    }
+  }
+  return new Set([...counts].filter(([, count]) => count >= 3).map(([text]) => text))
+}
+
+// --- manuscript line numbers -------------------------------------------------
+//
+// Submission and pre-proof PDFs print a line number beside every line. They
+// are their own text items: a bare integer, alone at the outer edge of its
+// line with a clear gap to the text, aligned in a column, counting up down the
+// page, on page after page. All of those must hold before anything is
+// removed, so a table's numeric first column, a page number, or a number in a
+// sentence is never mistaken for one.
+
+const LINE_NUMBER_RE = /^\d{1,5}$/
+const LINE_NUMBER_MIN_RUN = 5
+const LINE_NUMBER_MIN_PAGES = 3
+const LINE_NUMBER_SINGLE_PAGE_RUN = 20
+
+function marginNumberCandidates(page, pageIndex, body) {
+  const out = []
+  for (const item of page.items) {
+    if (!LINE_NUMBER_RE.test(item.str.trim())) continue
+    const sameLine = page.items.filter((other) => other !== item && Math.abs(other.y - item.y) <= Math.max(2, item.h * 0.3))
+    const before = sameLine.filter((other) => other.x + other.w / 2 < item.x + item.w / 2)
+    const after = sameLine.filter((other) => other.x + other.w / 2 >= item.x + item.w / 2)
+    const gapAfter = after.length ? Math.min(...after.map((other) => other.x)) - (item.x + item.w) : Infinity
+    const gapBefore = before.length ? item.x - Math.max(...before.map((other) => other.x + other.w)) : Infinity
+    const clear = body * 0.8
+    if ((!before.length && gapAfter >= clear) || (!after.length && gapBefore >= clear)) {
+      out.push({ item, pageIndex, value: Number(item.str.trim()) })
+    }
+  }
+  return out
+}
+
+// Group values that sit within `tolerance` of each other.
+function clusterBy(candidates, edgeOf, tolerance = 2) {
+  const sorted = [...candidates].sort((a, b) => edgeOf(a) - edgeOf(b))
+  const clusters = []
+  for (const candidate of sorted) {
+    const last = clusters[clusters.length - 1]
+    if (last && edgeOf(candidate) - last.edge <= tolerance) last.members.push(candidate)
+    else clusters.push({ edge: edgeOf(candidate), members: [candidate] })
+  }
+  return clusters
+}
+
+// One page's share of a column: counting up from the top, in small steps.
+function isCountingRun(members) {
+  if (members.length < LINE_NUMBER_MIN_RUN) return false
+  const values = [...members].sort((a, b) => b.item.y - a.item.y).map((member) => member.value)
+  let small = 0
+  for (let i = 1; i < values.length; i += 1) {
+    const step = values[i] - values[i - 1]
+    if (step <= 0) return false
+    if (step <= 3) small += 1
+  }
+  return small >= (values.length - 1) * 0.9
+}
+
+export function lineNumberItems(pages, body) {
+  const candidates = pages.flatMap((page, index) => marginNumberCandidates(page, index, body))
+  const remove = new Set()
+  // Right-aligned columns share a right edge, left-aligned ones a left edge.
+  const edges = [(c) => c.item.x + c.item.w, (c) => c.item.x]
+  for (const edgeOf of edges) {
+    for (const cluster of clusterBy(candidates, edgeOf)) {
+      const byPage = new Map()
+      for (const member of cluster.members) byPage.set(member.pageIndex, [...(byPage.get(member.pageIndex) || []), member])
+      const runs = [...byPage.values()].filter(isCountingRun)
+      // A short document must show one long run instead: a single page's
+      // numeric table column is short.
+      const enoughPages = runs.length >= LINE_NUMBER_MIN_PAGES
+      const longRun = runs.some((run) => run.length >= LINE_NUMBER_SINGLE_PAGE_RUN)
+      if (!enoughPages && !longRun) continue
+      for (const run of runs) for (const member of run) remove.add(member.item)
+    }
+  }
+  return remove
+}
+
+export function layoutToText(rawPages) {
+  const watermarks = rotatedRepeats(rawPages)
+  const upright = rawPages.map((page) => uprightItems(page, watermarks))
+  const body = bodyHeight(upright)
   if (!body) return ''
+  const lineNumbers = lineNumberItems(upright, body)
+  const pages = upright.map((page) => ({ ...page, items: page.items.filter((item) => !lineNumbers.has(item)) }))
   const pagesLines = pages.map((page) => pageLines(page, body))
   const repeated = repeatedEdgeLines(pagesLines)
   const lines = pagesLines.flatMap((pageLinesList) => (
