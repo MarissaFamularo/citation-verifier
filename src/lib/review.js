@@ -64,6 +64,8 @@ export function summarize(rows) {
     checked: checkable.filter((row) => row.claude || row.jev).length,
     reviewed: checkable.filter((row) => row.review?.decision).length,
     uncited: rows.length - checkable.length,
+    // References whose printed text could not be read reliably — never matched.
+    unreadable: new Set(rows.filter((row) => row.parseWarning).map((row) => row.refNumber)).size,
   }
 }
 

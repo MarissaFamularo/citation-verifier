@@ -13,7 +13,7 @@ const CHECK_CONCURRENCY = 4
 
 const FILTERS = {
   all: () => true,
-  attention: (row) => row.sentence && (row.error || ['refuted', 'flagged', 'unverified'].includes(row.claude?.verdict) || (row.jev && (row.jev.relation !== 'supports' || row.jev.needsReview))),
+  attention: (row) => row.sentence && (row.error || row.parseWarning || row.rejectedCandidates?.length || ['refuted', 'flagged', 'unverified'].includes(row.claude?.verdict) || (row.jev && (row.jev.relation !== 'supports' || row.jev.needsReview))),
   unreviewed: (row) => row.sentence && !row.review?.decision,
   abstractOnly: (row) => row.sentence && (row.sourceTier === 'abstract_only' || row.needsPdf),
 }
@@ -198,6 +198,13 @@ export default function App() {
 
       {rows.length > 0 && (
         <section className="space-y-3">
+          {summary.unreadable > 0 && (
+            <div className="panel border-amber-300 p-3 text-sm text-amber-900 dark:border-amber-800 dark:text-amber-200">
+              {summary.unreadable} of {new Set(rows.map((row) => row.refNumber)).size} references could not be read reliably from this file
+              (for example, a multi-column reference list read out of order). They were not matched to any paper and are marked below —
+              check them by hand, or upload the .docx instead.
+            </div>
+          )}
           <div className="panel flex flex-wrap items-center gap-2 p-3 text-sm">
             <span className="mr-auto">
               {summary.sentences} citing sentences · {summary.checked} checked ({rows.filter((row) => row.sourceTier === 'full_text').length} on full text) · {summary.reviewed} reviewed

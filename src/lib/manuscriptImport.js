@@ -231,16 +231,61 @@ export function splitManuscript(text) {
 // like several references run together keeps a parseWarning, and is reported
 // unresolved instead of being looked up.
 export const REFERENCE_ENTRY_CHAR_CAP = 2000
-// "…595-603. 7. Maurel B, …" — an entry start (a later number, then a
-// surname and initials) inside an entry's text.
-const EMBEDDED_ENTRY_RE = /[.)\]]\s+(?:\[(\d{1,3})\]|(\d{1,3})(?:\.\.?|\)))\s+\p{Lu}[\p{L}'’-]+,?\s+\p{Lu}{1,3}[,.]/gu
+// "…595-603. 7. Maurel B, …" / "…00290-3 18. Gorelick PB, …" — an entry
+// start (a number, then a surname and initials) inside an entry's text. A
+// number after "No." / "Vol." / "Pt." is part of the citation itself.
+const EMBEDDED_ENTRY_RE = /(?<!\b(?:No|NO|no|Nos|Vol|vol|Pt|Ch|Suppl|Issue))[.)\]\d]\s+(?:\[(\d{1,3})\]|(\d{1,3})(?:\.\.?|\)))\s+\p{Lu}[\p{L}'’-]+,?\s+\p{Lu}{1,3}[,.]/gu
+// A journal locus: "2015;61(2):309-316", "2016;5:e38", "2024;190:111423".
+const LOCUS_RE = /\b(?:19|20)\d{2}\s*;\s*\d+(?:\s*\([^)]{1,12}\))?\s*:\s*[eS]?\d+/g
+const DOI_ALL_RE = /\b10\.\d{4,9}\/[^\s"'<>]+/g
+// A year, or "n.d." for an undated source.
+const YEAR_RE = /\b(?:1[89]|20)\d{2}\b|\bn\.\s?d\./i
 
-function looksMerged(entry) {
-  if (entry.raw.length > REFERENCE_ENTRY_CHAR_CAP) return true
-  for (const match of entry.raw.matchAll(EMBEDDED_ENTRY_RE)) {
-    if (!Number.isInteger(entry.number) || Number(match[1] ?? match[2]) > entry.number) return true
+// Why one entry's text cannot be trusted, judged on the entry alone. These
+// are the marks of a list read in the wrong order — lines of neighbouring
+// references interleaved (a multi-column layout read across), or an entry
+// cut short where its remainder went to another one.
+export function entryProblems(entry) {
+  const raw = entry.raw
+  const problems = []
+  const embedded = [...raw.matchAll(EMBEDDED_ENTRY_RE)].some((match) => Number(match[1] ?? match[2]) !== entry.number)
+  if (embedded || raw.length > REFERENCE_ENTRY_CHAR_CAP) problems.push('this entry may contain more than one reference')
+  const loci = new Set([...raw.matchAll(LOCUS_RE)].map((match) => match[0].replace(/\s+/g, '')))
+  if (loci.size > 1) problems.push('it contains two journal citations')
+  const dois = new Set([...raw.matchAll(DOI_ALL_RE)].map((match) => match[0].replace(/[).,;]+$/, '').toLowerCase()))
+  if (dois.size > 1) problems.push('it contains two DOIs')
+  const linked = /https?:\/\/|\b10\.\d{4,9}\//.test(raw)
+  if (/(?:[-–:;,(]|\bet al\.|\bdoi:\s*10\.)$/.test(raw) || (!YEAR_RE.test(raw) && !linked)) {
+    problems.push('it looks cut off')
   }
-  return false
+  return problems
+}
+
+// Problems only the whole list shows. Printed numbers that run backwards
+// more than once mean the reading order itself is wrong, and then no entry's
+// text is trustworthy — even one that looks complete may carry a
+// neighbour's title. A number missing from the middle of the list most
+// likely sits inside the entry before the gap.
+function listProblems(entries) {
+  const numbered = entries.filter((entry) => Number.isInteger(entry.number))
+  const problems = new Map(entries.map((entry) => [entry, []]))
+  let descents = 0
+  for (let i = 1; i < numbered.length; i += 1) if (numbered[i].number < numbered[i - 1].number) descents += 1
+  if (descents >= 2) {
+    for (const entry of numbered) problems.get(entry).push('the reference list was read out of order (likely a multi-column layout), so its entries may be mixed together')
+    return problems
+  }
+  const present = new Set(numbered.map((entry) => entry.number))
+  const highest = Math.max(0, ...present)
+  for (const entry of numbered) {
+    let missing = entry.number + 1
+    while (missing < highest && !present.has(missing)) missing += 1
+    if (missing > entry.number + 1 && missing <= highest) {
+      const gap = missing - 1 === entry.number + 1 ? `${entry.number + 1} is` : `${entry.number + 1}–${missing - 1} are`
+      problems.get(entry).push(`reference ${gap} missing from the list and may be inside this entry`)
+    }
+  }
+  return problems
 }
 
 // Text lost the line breaks between entries: cut where the NEXT number starts
@@ -302,20 +347,21 @@ export function numberReferenceEntries(referenceText) {
     const warnings = []
     if (!Number.isInteger(entry.number)) {
       warnings.push('text before the first numbered reference')
-    } else {
-      // Out-of-order numbers are left alone: multi-column lists are often
-      // read out of order, and the printed number is still the right one.
-      if (seen.has(entry.number)) warnings.push(`reference number ${entry.number} appears more than once`)
-      seen.add(entry.number)
+    } else if (seen.has(entry.number)) {
+      warnings.push(`reference number ${entry.number} appears more than once`)
     }
-    if (looksMerged(entry)) {
-      warnings.push('this entry may contain more than one reference')
-    }
-    entries.push({ number: entry.number, raw: entry.raw, ...(warnings.length ? { parseWarning: warnings.join('; ') } : {}) })
+    seen.add(entry.number)
+    entries.push({ number: entry.number, raw: entry.raw, warnings: [...warnings, ...entryProblems(entry)] })
     if (entries.length >= REFERENCE_CAP) break
   }
-  // An entry without a number cannot be attached to any citation.
-  return entries.filter((entry) => Number.isInteger(entry.number) || entry.parseWarning)
+  const fromList = listProblems(entries)
+  return entries
+    // An entry without a number cannot be attached to any citation.
+    .filter((entry) => Number.isInteger(entry.number) || entry.warnings.length)
+    .map((entry) => {
+      const warnings = [...fromList.get(entry), ...entry.warnings]
+      return { number: entry.number, raw: entry.raw, ...(warnings.length ? { parseWarning: warnings.join('; ') } : {}) }
+    })
 }
 
 // --- printed identifiers (deterministic, no model) ---------------------------

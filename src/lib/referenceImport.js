@@ -501,7 +501,8 @@ export async function resolveReferences(references, { isSaved, onProgress, signa
     } else {
       results.push(result)
     }
-    if (index < references.length - 1) await pause(resolvePacingMs(), signal)
+    // A reference refused without a lookup costs no request, so no wait.
+    if (index < references.length - 1 && result.method !== 'unparsed') await pause(resolvePacingMs(), signal)
   }
   onProgress?.(references.length, references.length, null)
   return results

@@ -11,7 +11,7 @@ test('buildRows makes one row per citing sentence and keeps uncited references',
   assert.deepEqual(rows.map((row) => row.id), ['1:1', '1:2', '2:0'])
   assert.equal(rows[0].paper.pmid, '123')
   assert.equal(rows[2].sentence, '')
-  assert.deepEqual(summarize(rows), { sentences: 2, checked: 0, reviewed: 0, uncited: 1 })
+  assert.deepEqual(summarize(rows), { sentences: 2, checked: 0, reviewed: 0, uncited: 1, unreadable: 0 })
 })
 
 test('setDecision records the human verdict and rejects unknown decisions', () => {
