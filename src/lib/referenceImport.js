@@ -170,6 +170,8 @@ export async function parseReferenceList(text) {
     content: paste,
     schema: REFERENCE_LIST_SCHEMA,
     maxTokens: 32_000,
+    // Copying printed fields needs little thinking; low effort keeps it cheap.
+    effort: 'low',
   })
   return cleanParsedReferences(parsed)
 }

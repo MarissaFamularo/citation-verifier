@@ -456,6 +456,8 @@ export async function parseNumberedReferences(entries) {
     content,
     schema: NUMBERED_REFERENCE_SCHEMA,
     maxTokens: 32_000,
+    // Copying printed fields needs little thinking; low effort keeps it cheap.
+    effort: 'low',
   })
   return cleanNumberedParse(parsed, new Map(entries.map((entry) => [entry.number, entry])))
 }

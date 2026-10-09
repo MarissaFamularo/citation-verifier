@@ -10,7 +10,8 @@
 // Facts carried over from Verastar's docs/FACTS.md:
 //   - new Anthropic({ apiKey, dangerouslyAllowBrowser: true })
 //   - current models REJECT temperature / top_p / top_k (400)
-//   - adaptive thinking can truncate long outputs — the bot doesn't enable it
+//   - Haiku 5.5 thinks by default (adaptive); thinking counts toward
+//     max_tokens, so transcription calls run at low effort with a large cap
 //   - structured output: output_config: { format: { type: "json_schema", schema } }
 //   - do NOT combine citations with output_config.format (400) -> separate calls
 
@@ -22,17 +23,27 @@ const USAGE_STORAGE = 'citationverifier.anthropic_usage.v1'
 
 export const MODELS = {
   chat: 'claude-sonnet-5',
-  fast: 'claude-haiku-4-5-20251001',
+  // Reference transcription: copying printed fields, not judgment.
+  fast: 'claude-haiku-5-5',
 }
 
 // Browser-local spend ledger. Anthropic returns token usage on every successful
 // response, so record it before anything else can fail. Prices are USD per
-// million tokens; Sonnet 5's introductory rate ends after 2026-08-31.
-export function modelRates(model, now = new Date()) {
-  if (String(model).includes('haiku-4-5')) return { input: 1, output: 5 }
-  if (String(model).includes('sonnet-5')) {
-    return now < new Date('2026-09-01T00:00:00Z') ? { input: 2, output: 10 } : { input: 3, output: 15 }
+// million tokens (platform.claude.com/docs/en/about-claude/pricing, checked
+// 2026-10-09). Haiku 5.5 is priced by prompt length: a request whose prompt
+// (all input tokens, cache reads included) is over 100,000 tokens pays the
+// higher rate for the whole request.
+export const HAIKU_5_5_LONG_PROMPT = 100_000
+
+export function modelRates(model, promptTokens = 0) {
+  const id = String(model)
+  if (id.includes('haiku-5-5')) {
+    return promptTokens > HAIKU_5_5_LONG_PROMPT ? { input: 0.5, output: 2.5 } : { input: 0.1, output: 0.5 }
   }
+  if (id.includes('haiku-4-5')) return { input: 1, output: 5 }
+  // Sonnet 5's launch price became its standard price; the planned rise to
+  // $3/$15 on 2026-09-01 did not happen.
+  if (id.includes('sonnet-5')) return { input: 2, output: 10 }
   return { input: 3, output: 15 }
 }
 
@@ -50,7 +61,7 @@ export function recordUsage(model, usage, now = new Date()) {
   const input = Number(usage?.input_tokens || 0) + Number(usage?.cache_creation_input_tokens || 0)
   const cached = Number(usage?.cache_read_input_tokens || 0)
   const output = Number(usage?.output_tokens || 0)
-  const rates = modelRates(model, now)
+  const rates = modelRates(model, input + cached)
   const cost = ((input * rates.input) + (cached * rates.input * 0.1) + (output * rates.output)) / 1_000_000
   const prev = readUsage()
   const next = {
@@ -220,7 +231,7 @@ export function parseStructuredResponse(res) {
 // non-streaming request ("Streaming is required for operations that may take
 // longer than 10 minutes"). finalMessage() yields the same response shape a
 // non-streaming call returns, so nothing downstream changes.
-export async function extractStructured({ model = MODELS.fast, system, content, schema, maxTokens = 4096, thinking }) {
+export async function extractStructured({ model = MODELS.fast, system, content, schema, maxTokens = 4096, thinking, effort }) {
   const client = getClient()
   const stream = client.messages.stream({
     model,
@@ -228,7 +239,7 @@ export async function extractStructured({ model = MODELS.fast, system, content, 
     ...(system ? { system } : {}),
     ...(thinking ? { thinking } : {}),
     messages: [{ role: 'user', content }],
-    output_config: { format: { type: 'json_schema', schema } },
+    output_config: { format: { type: 'json_schema', schema }, ...(effort ? { effort } : {}) },
   })
   const res = await stream.finalMessage()
   recordUsage(model, res.usage)
