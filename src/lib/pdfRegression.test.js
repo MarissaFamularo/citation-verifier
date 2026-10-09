@@ -226,8 +226,8 @@ test('scoreMatch rejects an unrelated paper for a printed citation and accepts t
   const reference = { raw: MCNALLY, title: null, pmid: '384', doi: null, year: null }
   assert.equal(scoreMatch(reference, { title: CLOSTRIDIUM, publicationDate: '1976' }), 'reject')
   assert.equal(scoreMatch(reference, { title: 'Three-dimensional fusion computed tomography decreases radiation exposure, procedure time, and contrast use during fenestrated endovascular aortic repair.', publicationDate: '2015 Feb' }), 'match')
-  // Right words, wrong decade: shown with a caution, not accepted outright.
-  assert.equal(scoreMatch(reference, { title: 'Three-dimensional fusion computed tomography decreases radiation exposure, procedure time, and contrast use during fenestrated endovascular aortic repair.', publicationDate: '1995' }), 'check')
+  // Right words, wrong decade: a conflicting year rejects.
+  assert.equal(scoreMatch(reference, { title: 'Three-dimensional fusion computed tomography decreases radiation exposure, procedure time, and contrast use during fenestrated endovascular aortic repair.', publicationDate: '1995' }), 'reject')
 })
 
 // Browser globals the PubMed client touches; the abstract XML is empty here.

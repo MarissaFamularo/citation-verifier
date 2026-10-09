@@ -152,7 +152,7 @@ test('manuscriptNeedsModel is false when every entry prints an identifier', () =
 })
 
 test('cleanNumberedParse validates identifiers and realigns to entries', () => {
-  const entries = new Map([[1, { number: 1, raw: 'raw one' }], [2, { number: 2, raw: 'raw two' }]])
+  const entries = new Map([[1, { number: 1, raw: 'Smith J. Good title. JVS. 2024. PMID: 999' }], [2, { number: 2, raw: 'Lee K. Another. https://doi.org/10.1000/x' }]])
   const cleaned = cleanNumberedParse({
     references: [
       { number: 1, title: 'Good title', firstAuthor: 'Smith', journal: 'JVS', year: 2024, pmid: 'PMID: 999', doi: null },
@@ -162,8 +162,21 @@ test('cleanNumberedParse validates identifiers and realigns to entries', () => {
   }, entries)
   assert.equal(cleaned.length, 2)
   assert.equal(cleaned[0].pmid, '999')
-  assert.equal(cleaned[0].raw, 'raw one')
+  assert.equal(cleaned[0].raw, 'Smith J. Good title. JVS. 2024. PMID: 999')
   assert.equal(cleaned[1].doi, '10.1000/x')
+})
+
+test('cleanNumberedParse drops an identifier the entry does not print', () => {
+  const entries = new Map([[2, { number: 2, raw: 'Schanzer A, Simons JP. Outcomes of fenestrated and branched repair. J Vasc Surg. 2017;66(3):687-694.' }]])
+  const [row] = cleanNumberedParse({
+    references: [{ number: 2, title: 'Outcomes of fenestrated and branched repair', firstAuthor: 'Schanzer', journal: 'J Vasc Surg', year: 2017, pmid: '33262091', doi: '10.1016/j.ejvs.2020.11.001' }],
+  }, entries)
+  assert.equal(row.pmid, null)
+  assert.equal(row.doi, null)
+  assert.equal(row.title, 'Outcomes of fenestrated and branched repair')
+  // A number that is part of a longer printed number is not a printed PMID.
+  const pages = new Map([[1, { number: 1, raw: 'Smith J. Title. J X. 2017;66(3):687-694.' }]])
+  assert.equal(cleanNumberedParse({ references: [{ number: 1, title: 'Title', firstAuthor: null, journal: null, year: null, pmid: '68', doi: null }] }, pages)[0].pmid, null)
 })
 
 test('splitSentences keeps glued superscript citations with their sentence', () => {

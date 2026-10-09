@@ -92,12 +92,13 @@ test('extractYear reads a year out of PubMed-style dates', () => {
   assert.equal(extractYear('n.d.'), null)
 })
 
-test('scoreMatch accepts close titles, flags weak or year-shifted ones, rejects strangers', () => {
+test('scoreMatch accepts close titles and rejects strangers and year conflicts', () => {
   const reference = parsedRef()
   assert.equal(scoreMatch(reference, { title: 'Endovascular repair outcomes', publicationDate: '2024 Mar' }), 'match')
   // Epub-vs-print one-year drift still matches.
   assert.equal(scoreMatch(reference, { title: 'Endovascular repair outcomes', publicationDate: '2023 Dec' }), 'match')
-  assert.equal(scoreMatch(reference, { title: 'Endovascular repair outcomes', publicationDate: '2020' }), 'check')
+  // Four years off is a different paper, not a caution.
+  assert.equal(scoreMatch(reference, { title: 'Endovascular repair outcomes', publicationDate: '2020' }), 'reject')
   assert.equal(scoreMatch(reference, { title: 'A completely unrelated cardiology paper', publicationDate: '2024' }), 'reject')
   // No parsed title: the printed citation is the check, and a candidate whose
   // title it does not contain is a different paper.

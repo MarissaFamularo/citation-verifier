@@ -100,7 +100,7 @@ function csvCell(value) {
 const CSV_COLUMNS = [
   ['Ref #', (row) => row.refNumber],
   ['Reference', (row) => row.referenceRaw],
-  ['Reference warning', (row) => [row.parseWarning, ...(row.rejectedCandidates || []).map((item) => `${item.via} is a different paper: ${item.title}`)].filter(Boolean).join(' · ')],
+  ['Reference warning', (row) => [row.parseWarning, ...(row.rejectedCandidates || []).map((item) => (item.reason ? `closest search result not used (${item.reason}): ${item.title}` : `${item.via} is a different paper: ${item.title}`))].filter(Boolean).join(' · ')],
   ['PMID', (row) => row.paper?.pmid || ''],
   ['DOI', (row) => row.paper?.doi || ''],
   ['Section', (row) => row.section || ''],

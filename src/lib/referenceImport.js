@@ -8,7 +8,7 @@
 // search hit reaches the reviewer labeled, never silently accepted.
 
 import { extractStructured, getNcbiKey, MODELS } from './anthropic.js'
-import { resolveDirectPaper } from './directPaper.js'
+import { resolveDirectPaper, trimDoiEnd } from './directPaper.js'
 import { arxivDoi, arxivIdFrom, openAlexByDoi, searchOpenAlexByTitle } from './openAlex.js'
 import { fetchPubMedPapers, searchPubMed } from './pubmed.js'
 
@@ -23,6 +23,10 @@ export const REFERENCE_CAP = 100
 // a rate-limited response often surfaces in the browser as a bare
 // "Failed to fetch" (the 429 lacks CORS headers).
 export const RESOLVE_PACING_MS = 750
+
+// Candidates read per PubMed title query. A prolific group's papers share
+// most title words, so the right one can sit below the first few.
+export const TITLE_SEARCH_LIMIT = 10
 
 // An NCBI API key raises the ceiling to 10 req/s, so pacing can tighten.
 export function resolvePacingMs() {
@@ -81,10 +85,9 @@ export function cleanParsedReferences(parsed) {
     const title = compact(row?.title) || null
     const pmidText = compact(row?.pmid).replace(/^PMID:?\s*/i, '')
     const pmid = /^[0-9]{1,10}$/.test(pmidText) ? pmidText : null
-    const doiText = compact(row?.doi)
+    const doiText = trimDoiEnd(compact(row?.doi)
       .replace(/^doi:\s*/i, '')
-      .replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, '')
-      .replace(/[).,;]+$/, '')
+      .replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, ''))
     const doi = /^10\.\d{4,9}\/\S+$/.test(doiText) ? doiText : null
     const year = Number.isInteger(row?.year) && row.year >= 1800 && row.year <= CURRENT_YEAR + 1 ? row.year : null
     if (!raw || (!title && !pmid && !doi)) continue
@@ -140,7 +143,7 @@ export function partitionPastedReferences(text) {
   const seen = new Set()
   for (const raw of splitReferenceEntries(text)) {
     const doiMatch = raw.match(DOI_IN_TEXT_RE)
-    const doi = doiMatch ? doiMatch[1].replace(/[).,;]+$/, '') : null
+    const doi = doiMatch ? trimDoiEnd(doiMatch[1]) : null
     const pmidMatch = raw.match(PMID_IN_TEXT_RE) || (/^\d{1,10}$/.test(raw) ? [raw, raw] : null)
     const pmid = pmidMatch ? pmidMatch[1] : null
     if (!doi && !pmid) {
@@ -274,32 +277,126 @@ function contentContainment(rawText, title) {
 // reference is a bare identifier and the candidate cannot be second-guessed.
 const PRINTED_WORDS_MIN = 4
 
+// --- bibliographic agreement ------------------------------------------------
+//
+// A title alone does not identify a paper: one research group publishes many
+// papers with near-identical titles ("Outcomes of fenestrated and branched
+// endovascular repair…"). The printed first author and year are checked too,
+// and a candidate that contradicts either is a different paper however close
+// its title.
+
+function nameTokens(name) {
+  return normalizeTitle(name).split(' ').filter((word) => word.length > 1)
+}
+
+// The family name a printed citation starts with: "Schanzer A, Simons JP, …",
+// "de Weerd M, …", "El-Sayed T, …". Organizations ("US Food and Drug
+// Administration.") have no initials after them and yield null.
+// Only the Vancouver shape "Family Initials," counts: "David S. Resch …"
+// (given names first, ACM style) or a lone "Davis FD." is left unknown, and
+// an unknown author never blocks a match.
+const PRINTED_FIRST_AUTHOR_RE = /^\s*(\p{L}[\p{L}'’-]*(?:\s+\p{L}[\p{L}'’-]*){0,3}?)\s+\p{Lu}{1,3}\b\.?\s*[,;]/u
+
+export function printedFirstAuthor(raw) {
+  return String(raw ?? '').match(PRINTED_FIRST_AUTHOR_RE)?.[1] ?? null
+}
+
+// 'agree' | 'conflict' | 'unknown'. The surname's longest part must appear in
+// the candidate's first listed author (PubMed "Schanzer A", Crossref and
+// OpenAlex "Andres Schanzer"); diacritics and hyphens are ignored.
+// PubMed often lists a trial group ahead of its people ("EINSTEIN–PE
+// Investigators", "Büller HR", …); the comparison uses the first person.
+const COLLECTIVE_AUTHOR_RE = /\b(?:investigators|group|consortium|collaborat\w*|committee|society|association|trialists|network|team|council|study|writing)\b/i
+
+function firstPersonAuthor(authors) {
+  if (!Array.isArray(authors)) return null
+  return authors.find((name) => name && !COLLECTIVE_AUTHOR_RE.test(name) && String(name).trim().split(/\s+/).length <= 4) || null
+}
+
+export function firstAuthorAgreement(printedFamily, paperAuthors) {
+  const printed = nameTokens(printedFamily)
+  const first = firstPersonAuthor(paperAuthors)
+  if (!printed.length || !first) return 'unknown'
+  const key = printed.reduce((longest, word) => (word.length > longest.length ? word : longest), '')
+  return new Set(nameTokens(first)).has(key) ? 'agree' : 'conflict'
+}
+
+// Print and epub years routinely differ by one; more than that is a conflict.
+export function yearAgreement(printedYear, paper) {
+  const paperYear = extractYear(paper?.publicationDate ?? paper?.publication_date)
+  if (!printedYear || !paperYear) return 'unknown'
+  return Math.abs(printedYear - paperYear) <= 1 ? 'agree' : 'conflict'
+}
+
+// The publication year where citation styles print it: "2017;66(3):687" /
+// "2016;5:e38" (Vancouver, AMA) or "(2020)" (APA, Nature). Any other year in
+// the text may belong to the title ("…trends 2010–2020", "…by 2030"), so it
+// is not used, and an unknown year never conflicts.
+export function printedYear(raw) {
+  const text = String(raw ?? '').replace(/https?:\/\/\S+/gi, ' ').replace(/\b10\.\d{4,9}\/\S+/g, ' ')
+  const match = text.match(/\b((?:19|20)\d{2})[a-z]?\s*;/) || text.match(/\(((?:19|20)\d{2})[a-z]?\)/)
+  return match ? Number(match[1]) : null
+}
+
+// Why a candidate cannot be this reference, or [] when nothing contradicts it.
+export function matchConflicts(reference, paper) {
+  const family = reference?.firstAuthor || printedFirstAuthor(reference?.raw)
+  const year = reference?.year ?? printedYear(reference?.raw)
+  const conflicts = []
+  if (firstAuthorAgreement(family, paper?.authors) === 'conflict') {
+    conflicts.push(`first author ${firstPersonAuthor(paper.authors)}, not ${family}`)
+  }
+  if (yearAgreement(year, paper) === 'conflict') {
+    conflicts.push(`published ${extractYear(paper?.publicationDate ?? paper?.publication_date)}, not ${year}`)
+  }
+  return conflicts
+}
+
+function agreements(reference, paper) {
+  const family = reference?.firstAuthor || printedFirstAuthor(reference?.raw)
+  const year = reference?.year ?? printedYear(reference?.raw)
+  return [firstAuthorAgreement(family, paper?.authors), yearAgreement(year, paper)].filter((value) => value === 'agree').length
+}
+
 // 'match'  — add with confidence; 'check' — show the reviewer a caution badge;
-// 'reject' — wrong paper, keep looking. With no parsed title, verification
-// falls back to checking the resolved title against the raw citation text: a
-// candidate whose title is mostly absent from a printed citation is a
-// different paper (a mangled or misread identifier), and is rejected rather
-// than attached with a caution. A bare-identifier paste has nothing to check
-// against and stays 'check'.
+// 'reject' — wrong paper, keep looking (and, if nothing better turns up,
+// leave the reference unresolved). A first author or year that contradicts
+// the printed citation rejects outright. Below a near-exact title, a match
+// needs the author or year to agree; a loose title with nothing agreeing is
+// too uncertain to attach. With no parsed title, the candidate's title is
+// checked against the raw citation text instead. A bare-identifier paste has
+// nothing to check against and stays 'check'.
 export function scoreMatch(reference, paper) {
   if (!reference?.title) {
     if (printedWords(reference?.raw).length < PRINTED_WORDS_MIN) return 'check'
     const content = contentContainment(reference?.raw, paper?.title)
-    if (content < 0.5) return 'reject'
-    const containment = titleContainment(reference?.raw, paper?.title)
-    const refYear = extractYear(String(reference?.raw ?? '').replace(/\b10\.\d{4,9}\/\S+/g, ' '))
-    const paperYear = extractYear(paper?.publicationDate ?? paper?.publication_date)
-    const yearOk = refYear === null || paperYear === null || Math.abs(refYear - paperYear) <= 1
-    return containment >= 0.7 && yearOk ? 'match' : 'check'
+    if (content < 0.5 || matchConflicts(reference, paper).length) return 'reject'
+    return titleContainment(reference?.raw, paper?.title) >= 0.7 ? 'match' : 'check'
   }
   const similarity = titleSimilarity(reference.title, paper?.title)
-  const refYear = reference.year ?? null
-  const paperYear = extractYear(paper?.publicationDate ?? paper?.publication_date)
-  // Print vs epub years routinely differ by one; more than that is suspicious.
-  const yearOk = refYear === null || paperYear === null || Math.abs(refYear - paperYear) <= 1
-  if (similarity >= 0.7) return yearOk ? 'match' : 'check'
-  if (similarity >= 0.5) return 'check'
+  if (similarity < 0.5 || matchConflicts(reference, paper).length) return 'reject'
+  const agreed = agreements(reference, paper)
+  if (similarity >= 0.9 || (similarity >= 0.7 && agreed >= 1)) return 'match'
+  if (agreed >= 1) return 'check'
   return 'reject'
+}
+
+// PubMed title searches, most specific first. The printed first author and
+// year (±1 for print vs epub) narrow a prolific group's near-identical titles
+// to the right one; each later query relaxes a constraint in case the
+// transcription got that detail wrong.
+export function buildTitleQueries(reference) {
+  const title = compact(reference?.title).replace(/[.?!]+$/, '')
+  if (!title) return []
+  const author = compact(reference?.firstAuthor)
+  const year = Number.isInteger(reference?.year) ? reference.year : null
+  const queries = [
+    author && year ? `${title} AND ${author}[au] AND ${year - 1}:${year + 1}[dp]` : null,
+    author ? `${title} AND ${author}[au]` : null,
+    year ? `${title} AND ${year - 1}:${year + 1}[dp]` : null,
+    title,
+  ]
+  return [...new Set(queries.filter(Boolean))]
 }
 
 export function buildTitleQuery(reference) {
@@ -400,36 +497,46 @@ export async function resolveReference(reference, { signal } = {}) {
     }
   }
   if (reference.title) {
-    // Author-constrained first; a mis-parsed surname would sink that search,
-    // so an empty round falls back to the bare title.
-    const queries = [buildTitleQuery(reference)]
-    const bare = buildTitleQuery({ title: reference.title })
-    if (bare && bare !== queries[0]) queries.push(bare)
-    for (const query of queries) {
+    // Most specific query first; stop at the first confident match. A
+    // cautious 'check' is kept only if no later query finds a match, and the
+    // closest candidate refused for a contradiction is reported.
+    let fallback = null
+    let nearMiss = null
+    for (const query of buildTitleQueries(reference)) {
       try {
-        const { papers } = await withRetry(() => searchPubMed({ query, limit: 5, signal }), { signal })
+        const { papers } = await withRetry(() => searchPubMed({ query, limit: TITLE_SEARCH_LIMIT, signal }), { signal })
         let best = null
-        let bestConfidence = 'reject'
-        let bestSimilarity = 0
         for (const paper of papers || []) {
           const confidence = scoreMatch(reference, paper)
-          if (confidence === 'reject') continue
           const similarity = titleSimilarity(reference.title, paper.title)
-          const better = (confidence === 'match' && bestConfidence !== 'match')
-            || (confidence === bestConfidence && similarity > bestSimilarity)
-          if (!best || better) {
-            best = paper
-            bestConfidence = confidence
-            bestSimilarity = similarity
+          if (confidence === 'reject') {
+            const conflicts = matchConflicts(reference, paper)
+            if (conflicts.length && similarity >= 0.5 && (!nearMiss || similarity > nearMiss.similarity)) {
+              nearMiss = { paper, similarity, conflicts }
+            }
+            continue
           }
+          const better = !best
+            || (confidence === 'match' && best.confidence !== 'match')
+            || (confidence === best.confidence && similarity > best.similarity)
+          if (better) best = { paper, confidence, similarity }
         }
-        if (best) {
-          return { reference, paper: shapePaper(best), method: 'title', confidence: bestConfidence }
+        if (best?.confidence === 'match') {
+          return { reference, paper: shapePaper(best.paper), method: 'title', confidence: 'match' }
         }
+        if (best && (!fallback || best.similarity > fallback.similarity)) fallback = best
       } catch (err) {
         if (err?.name === 'AbortError') throw err
         lookupError = err
       }
+    }
+    if (fallback) return { reference, paper: shapePaper(fallback.paper), method: 'title', confidence: fallback.confidence }
+    if (nearMiss) {
+      rejected.push({
+        via: 'Title search',
+        title: nearMiss.paper.title,
+        reason: nearMiss.conflicts.join('; '),
+      })
     }
   }
   // Not in PubMed: preprints, conference papers, and non-biomedical journals

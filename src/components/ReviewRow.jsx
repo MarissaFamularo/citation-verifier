@@ -56,7 +56,11 @@ export default function ReviewRow({ row, busy, canCheck, getSource, onCheck, onA
         {row.section && <span className="text-xs text-stone-500">{row.section}</span>}
       </div>
       {(row.rejectedCandidates || []).map((item) => (
-        <p key={item.via} className="text-xs text-amber-800 dark:text-amber-300">The printed {item.via} leads to a different paper (“{item.title}”), so it was not used.</p>
+        <p key={item.via} className="text-xs text-amber-800 dark:text-amber-300">
+          {item.reason
+            ? <>The closest search result (“{item.title}”) was not used: {item.reason}.</>
+            : <>The printed {item.via} leads to a different paper (“{item.title}”), so it was not used.</>}
+        </p>
       ))}
       {paper && row.referenceRaw && (
         <details className="text-xs text-stone-500">

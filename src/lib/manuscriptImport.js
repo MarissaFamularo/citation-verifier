@@ -10,6 +10,7 @@
 // span of the manuscript the user gave us — nothing is composed.
 
 import { extractStructured, MODELS } from './anthropic.js'
+import { trimDoiEnd } from './directPaper.js'
 import { normalizeTitle } from './referenceImport.js'
 
 export const MANUSCRIPT_CHAR_CAP = 600_000
@@ -252,7 +253,7 @@ export function entryProblems(entry) {
   if (embedded || raw.length > REFERENCE_ENTRY_CHAR_CAP) problems.push('this entry may contain more than one reference')
   const loci = new Set([...raw.matchAll(LOCUS_RE)].map((match) => match[0].replace(/\s+/g, '')))
   if (loci.size > 1) problems.push('it contains two journal citations')
-  const dois = new Set([...raw.matchAll(DOI_ALL_RE)].map((match) => match[0].replace(/[).,;]+$/, '').toLowerCase()))
+  const dois = new Set([...raw.matchAll(DOI_ALL_RE)].map((match) => trimDoiEnd(match[0]).toLowerCase()))
   if (dois.size > 1) problems.push('it contains two DOIs')
   const linked = /https?:\/\/|\b10\.\d{4,9}\//.test(raw)
   if (/(?:[-–:;,(]|\bet al\.|\bdoi:\s*10\.)$/.test(raw) || (!YEAR_RE.test(raw) && !linked)) {
@@ -371,7 +372,7 @@ const PMID_IN_TEXT_RE = /\bPMID:?\s*(\d{1,10})\b/i
 
 export function entryIdentifiers(raw) {
   const doiMatch = String(raw ?? '').match(DOI_IN_TEXT_RE)
-  const doi = doiMatch ? doiMatch[1].replace(/[).,;]+$/, '') : null
+  const doi = doiMatch ? trimDoiEnd(doiMatch[1]) : null
   const pmidMatch = String(raw ?? '').match(PMID_IN_TEXT_RE)
   const pmid = pmidMatch ? pmidMatch[1] : null
   return { pmid, doi }
@@ -425,12 +426,14 @@ export function cleanNumberedParse(parsed, entriesByNumber) {
     seen.add(number)
     const title = compact(row?.title) || null
     const pmidText = compact(row?.pmid).replace(/^PMID:?\s*/i, '')
-    const pmid = /^[0-9]{1,10}$/.test(pmidText) ? pmidText : null
-    const doiText = compact(row?.doi)
+    // An identifier is kept only if it is printed in the entry itself: the
+    // model is told to copy, and the code makes sure it did.
+    const printed = entry.raw.toLowerCase()
+    const pmid = /^[0-9]{1,10}$/.test(pmidText) && new RegExp(`(?<!\\d)${pmidText}(?!\\d)`).test(printed) ? pmidText : null
+    const doiText = trimDoiEnd(compact(row?.doi)
       .replace(/^doi:\s*/i, '')
-      .replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, '')
-      .replace(/[).,;]+$/, '')
-    const doi = /^10\.\d{4,9}\/\S+$/.test(doiText) ? doiText : null
+      .replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, ''))
+    const doi = /^10\.\d{4,9}\/\S+$/.test(doiText) && printed.includes(doiText.toLowerCase()) ? doiText : null
     if (!title && !pmid && !doi) continue
     cleaned.push({
       number,

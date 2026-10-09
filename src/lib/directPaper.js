@@ -8,11 +8,17 @@ function compact(value) {
   return String(value || '').replace(/\s+/g, ' ').trim()
 }
 
+// Punctuation a citation prints after a DOI. A closing bracket goes too
+// ("[doi: 10.1002/berj.4069]", JMIR style) unless the DOI itself opens one.
+export function trimDoiEnd(doi) {
+  const trimmed = String(doi ?? '').replace(/[).,;]+$/, '')
+  return trimmed.includes('[') ? trimmed : trimmed.replace(/[\]).,;]+$/, '')
+}
+
 function cleanDoi(value) {
-  return compact(value)
+  return trimDoiEnd(compact(value)
     .replace(/^doi:\s*/i, '')
-    .replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, '')
-    .replace(/[).,;]+$/, '')
+    .replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, ''))
 }
 
 export function parseDirectPaperInput(value) {
