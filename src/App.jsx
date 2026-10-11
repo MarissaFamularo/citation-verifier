@@ -84,7 +84,20 @@ export default function App() {
     }
   }
 
+  // Drop the table that is on screen before any new manuscript is read. A
+  // saved review is the exception: it replaces the table only after the file
+  // parses, so a bad .json leaves the current review in place.
+  function beginNewManuscript(name) {
+    setRows([])
+    setFileName(name)
+    setDownloadNote('')
+    setResumeNote('')
+    setError('')
+    setStatus('Reading the manuscript…')
+  }
+
   function importText(text, name) {
+    beginNewManuscript(name)
     return run(async (signal) => {
       setStatus('Reading the manuscript…')
       const outcome = await importManuscript(text, {
@@ -110,14 +123,17 @@ export default function App() {
         setError('')
         setResumeNote('')
         setDownloadNote('')
+        setStatus('')
       } catch (err) {
         setError(err.message)
       }
       return
     }
+    beginNewManuscript(file.name)
     try {
       await importText(await readManuscriptFile(file), file.name)
     } catch (err) {
+      setStatus('')
       setError(err.message)
     }
   }
@@ -204,7 +220,15 @@ export default function App() {
           <button
             className="btn"
             disabled={busy}
-            onClick={async () => importText(await (await fetch('/sample-manuscript.txt')).text(), 'sample-manuscript.txt')}
+            onClick={async () => {
+              beginNewManuscript('sample-manuscript.txt')
+              try {
+                await importText(await (await fetch('/sample-manuscript.txt')).text(), 'sample-manuscript.txt')
+              } catch (err) {
+                setStatus('')
+                setError(err.message)
+              }
+            }}
           >Try a sample (one citation is deliberately wrong)</button>
           {fileName && <span className="text-sm text-stone-600 dark:text-stone-400">{fileName}</span>}
         </div>

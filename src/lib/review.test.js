@@ -7,6 +7,8 @@ import {
   isUncheckedSentence,
   needsAttention,
   paperMatchStatus,
+  referenceWarning,
+  UNMATCHED_WARNING,
   parseReviewFile,
   rowsToCsv,
   serializeReview,
@@ -45,8 +47,12 @@ test('an unresolved cited reference is counted apart from a failed lookup', () =
   assert.equal(needsAttention(rows.find((row) => row.refNumber === 3)), true)
   assert.equal(uncheckedSentenceCount(rows), 2)
   assert.equal(rows.filter(isUncheckedSentence).every((row) => row.paper), true)
+  const unmatched = rows.find((row) => row.refNumber === 3)
+  assert.equal(referenceWarning(unmatched), UNMATCHED_WARNING)
+  assert.equal(referenceWarning(rows.find((row) => row.refNumber === 1)), '')
   const csv = rowsToCsv(rows)
-  assert.match(csv, /no matching paper found/)
+  assert.match(csv, /No matching paper found — check this one by hand,no matching paper found/)
+  assert.match(csv, /Smith J\. Bypass\. JVS 2020\.,,matched/)
   assert.doesNotMatch(csv, /fabricat/i)
 
   const failed = buildRows(REFS, BY_NUMBER, [
@@ -58,6 +64,8 @@ test('an unresolved cited reference is counted apart from a failed lookup', () =
   assert.equal(paperMatchStatus(missed), 'lookup failed')
   assert.equal(summarize(failed).unmatched, 0)
   assert.equal(summarize(failed).lookupFailed, 1)
+  assert.equal(referenceWarning(missed), 'PubMed stopped answering')
+  assert.match(rowsToCsv(failed), /PubMed stopped answering,lookup failed/)
 })
 
 test('unchecked sentences are counted per citing sentence, and a finished set is empty', () => {

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { locateQuote } from '../lib/sourceLocate.js'
-import { DECISIONS, JEV_MARK_HELP, claudeVerdictLabel, formatJevMark, isUnmatchedPaper } from '../lib/review.js'
+import { DECISIONS, JEV_MARK_HELP, UNMATCHED_WARNING, claudeVerdictLabel, formatJevMark, isUnmatchedPaper } from '../lib/review.js'
 import { cleanSentence } from '../lib/typesafe.js'
 
 const VERDICT_STYLE = {
@@ -54,7 +54,7 @@ export default function ReviewRow({ row, busy, canCheck, getSource, onCheck, onA
       </div>
       {unmatched && (
         <div className="rounded-md border border-amber-500 bg-amber-50 px-3 py-2 text-sm text-amber-950 dark:border-amber-600 dark:bg-amber-950/40 dark:text-amber-100" role="status">
-          <p className="font-medium">No matching paper found — check this one by hand</p>
+          <p className="font-medium">{UNMATCHED_WARNING}</p>
           <p className="mt-1">PubMed and OpenAlex returned no paper, so {row.sentence ? 'this citing sentence was not checked against a source' : 'there is no source to check'}. Leave it unresolved until you look it up yourself. It may be a misprint, a paper those indexes do not carry, or a citation with no real paper behind it.</p>
         </div>
       )}

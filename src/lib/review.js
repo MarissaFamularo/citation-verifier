@@ -72,6 +72,23 @@ export function paperMatchStatus(row) {
   return 'no matching paper found'
 }
 
+// Same headline as the row warning. The Paper match column is a short status;
+// Reference warning is where a spreadsheet reader looks for the finding.
+export const UNMATCHED_WARNING = 'No matching paper found — check this one by hand'
+
+export function referenceWarning(row) {
+  const parts = []
+  if (row?.parseWarning) parts.push(row.parseWarning)
+  for (const item of row?.rejectedCandidates || []) {
+    parts.push(item.reason
+      ? `closest search result not used (${item.reason}): ${item.title}`
+      : `${item.via} is a different paper: ${item.title}`)
+  }
+  if (isUnmatchedPaper(row)) parts.push(UNMATCHED_WARNING)
+  else if (!row?.paper && row?.matchError) parts.push(row.matchError)
+  return parts.filter(Boolean).join(' · ')
+}
+
 // Citing sentences the Check button can still send to a model. A sentence
 // whose reference never matched a paper is not waiting in this queue — it is
 // reported on its own, because there is no source to check it against.
@@ -191,7 +208,7 @@ function csvCell(value) {
 const CSV_COLUMNS = [
   ['Ref #', (row) => row.refNumber],
   ['Reference', (row) => row.referenceRaw],
-  ['Reference warning', (row) => [row.parseWarning, ...(row.rejectedCandidates || []).map((item) => (item.reason ? `closest search result not used (${item.reason}): ${item.title}` : `${item.via} is a different paper: ${item.title}`))].filter(Boolean).join(' · ')],
+  ['Reference warning', (row) => referenceWarning(row)],
   ['Paper match', (row) => paperMatchStatus(row)],
   ['PMID', (row) => row.paper?.pmid || ''],
   ['DOI', (row) => row.paper?.doi || ''],
