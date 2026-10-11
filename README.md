@@ -30,8 +30,10 @@ non-biomedical journals are covered too.
    the citing sentence are checked against the paper in code.
 4. **Jev** ([TypeSafe](https://typesafe.ai)'s System One model) reads the sentence
    next to that passage and returns a probability for *supports / contradicts /
-   says nothing*. P(supports) is the reliability mark; low confidence means Jev
-   itself is unsure.
+   says nothing*. The table shows that call, the probability the passage
+   supports the sentence, and Jev's confidence in its own call. A probability
+   of support of 0% with confidence near 1 means Jev is sure the passage does
+   not support the sentence; low confidence means Jev itself is unsure.
 5. **You** decide. Model output never overwrites a human verdict.
 
 Either model works on its own; with both, Jev scores the quote Claude proved.
