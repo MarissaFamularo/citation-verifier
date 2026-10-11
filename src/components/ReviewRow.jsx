@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { locateQuote } from '../lib/sourceLocate.js'
-import { DECISIONS } from '../lib/review.js'
+import { DECISIONS, JEV_MARK_HELP, claudeVerdictLabel, formatJevMark, isUnmatchedPaper } from '../lib/review.js'
 import { cleanSentence } from '../lib/typesafe.js'
 
 const VERDICT_STYLE = {
@@ -9,12 +9,9 @@ const VERDICT_STYLE = {
   refuted: 'bg-red-100 text-red-900 dark:bg-red-900/40 dark:text-red-200',
   unverified: 'bg-stone-200 text-stone-800 dark:bg-stone-700 dark:text-stone-100',
 }
-const REFUTED_LABEL = { contradicts: 'contradicted or overstated', off_topic: 'paper is about something else', silent: 'not found in the full text' }
-const VERDICT_LABEL = { supported: 'supported', flagged: 'flagged', refuted: 'not supported', unverified: 'not in abstract — needs full text' }
-const RELATION_LABEL = { supports: 'supports', contradicts: 'contradicts', says_nothing: 'says nothing' }
 
-function Badge({ className = '', children }) {
-  return <span className={`rounded px-1.5 py-0.5 text-xs font-medium ${className}`}>{children}</span>
+function Badge({ className = '', title, children }) {
+  return <span title={title} className={`rounded px-1.5 py-0.5 text-xs font-medium ${className}`}>{children}</span>
 }
 
 function SourceContext({ row, getSource }) {
@@ -37,24 +34,36 @@ function SourceContext({ row, getSource }) {
 
 export default function ReviewRow({ row, busy, canCheck, getSource, onCheck, onAddPdf, onDecision }) {
   const { paper, claude, jev, review } = row
+  const unmatched = isUnmatchedPaper(row)
   const paperUrl = paper ? (row.oaUrl || (paper.pmid ? `https://pubmed.ncbi.nlm.nih.gov/${paper.pmid}/` : paper.sourceUrl || (paper.doi ? `https://doi.org/${paper.doi}` : null))) : null
   const wantsPdf = paper && row.sentence && (row.sourceTier === 'abstract_only' || row.needsPdf)
   const settled = claude ? claude.verdict === 'supported' : jev?.relation === 'supports' && !jev.needsReview
   const tier = row.sourceTier === 'full_text' ? (row.userSupplied ? 'full text checked (your PDF)' : 'full text checked') : row.sourceTier === 'abstract_only' ? 'abstract only checked' : null
 
   return (
-    <article className="panel space-y-3 p-4">
+    <article className={`panel space-y-3 p-4 ${unmatched ? 'border-amber-500 ring-1 ring-amber-300 dark:border-amber-600 dark:ring-amber-800' : ''}`}>
       <div className="flex flex-wrap items-baseline gap-2 text-sm">
         <span className="font-semibold">[{row.refNumber ?? '–'}]</span>
         {paper
           ? <a className="underline decoration-stone-400" href={paper.pmid ? `https://pubmed.ncbi.nlm.nih.gov/${paper.pmid}/` : paper.sourceUrl || `https://doi.org/${paper.doi}`} target="_blank" rel="noreferrer">{paper.title}</a>
           : <span className="text-stone-600 dark:text-stone-400">{row.referenceRaw}</span>}
         {!paper && row.parseWarning && <Badge className={VERDICT_STYLE.flagged}>reference not looked up — {row.parseWarning}; check it by hand</Badge>}
-        {!paper && !row.parseWarning && <Badge className={VERDICT_STYLE.flagged}>no matching paper found — check this one by hand</Badge>}
         {paper && !paper.pmid && <span className="text-xs text-stone-500">{paper.sourceType === 'arxiv' ? 'arXiv' : 'via OpenAlex'}</span>}
         {row.matchConfidence === 'check' && <Badge className={VERDICT_STYLE.flagged}>loose title match — confirm it is the right paper</Badge>}
         {row.section && <span className="text-xs text-stone-500">{row.section}</span>}
       </div>
+      {unmatched && (
+        <div className="rounded-md border border-amber-500 bg-amber-50 px-3 py-2 text-sm text-amber-950 dark:border-amber-600 dark:bg-amber-950/40 dark:text-amber-100" role="status">
+          <p className="font-medium">No matching paper found — check this one by hand</p>
+          <p className="mt-1">PubMed and OpenAlex returned no paper, so {row.sentence ? 'this citing sentence was not checked against a source' : 'there is no source to check'}. Leave it unresolved until you look it up yourself. It may be a misprint, a paper those indexes do not carry, or a citation with no real paper behind it.</p>
+        </div>
+      )}
+      {!paper && !row.parseWarning && row.matchError && (
+        <div className="rounded-md border border-amber-400 bg-amber-50 px-3 py-2 text-sm text-amber-950 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100" role="status">
+          <p className="font-medium">Lookup failed — this reference was not matched</p>
+          <p className="mt-1">{row.matchError} The search did not finish, so there is no finding yet about whether a paper exists. Try the manuscript again in a moment.</p>
+        </div>
+      )}
       {(row.rejectedCandidates || []).map((item) => (
         <p key={item.via} className="text-xs text-amber-800 dark:text-amber-300">
           {item.reason
@@ -76,10 +85,10 @@ export default function ReviewRow({ row, busy, canCheck, getSource, onCheck, onA
       {row.sentence && (
         <div className="space-y-2 text-sm">
           <div className="flex flex-wrap items-center gap-2">
-            {claude && <Badge className={VERDICT_STYLE[claude.verdict]}>Claude: {REFUTED_LABEL[claude.relation] && claude.verdict === 'refuted' ? REFUTED_LABEL[claude.relation] : VERDICT_LABEL[claude.verdict] || claude.verdict}</Badge>}
+            {claude && <Badge className={VERDICT_STYLE[claude.verdict]}>Claude: {claudeVerdictLabel(claude)}</Badge>}
             {jev && (
-              <Badge className={jev.relation === 'supports' && !jev.needsReview ? VERDICT_STYLE.supported : jev.relation === 'contradicts' ? VERDICT_STYLE.refuted : VERDICT_STYLE.flagged}>
-                Jev: {RELATION_LABEL[jev.relation] || jev.relation} · reliability {Math.round(jev.reliability * 100)}% · confidence {jev.confidence.toFixed(2)}
+              <Badge title={JEV_MARK_HELP} className={jev.relation === 'supports' && !jev.needsReview ? VERDICT_STYLE.supported : jev.relation === 'contradicts' ? VERDICT_STYLE.refuted : VERDICT_STYLE.flagged}>
+                Jev: {formatJevMark(jev)}
               </Badge>
             )}
             {jev?.needsReview && <Badge className="border border-amber-400 text-amber-800 dark:text-amber-300">Jev is unsure — look closely</Badge>}

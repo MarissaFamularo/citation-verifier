@@ -18,10 +18,14 @@ import { resolveReferences } from './referenceImport.js'
 import { buildRows } from './review.js'
 import { hasTypesafeKey, scoreCitationSupport } from './typesafe.js'
 
+// References that print neither a DOI nor a PMID are transcribed by Claude.
+// The manuscript section and the key panel both recognize this exact message.
+export const ANTHROPIC_KEY_REQUIRED = 'Some references print no DOI or PMID, so reading them needs Claude — add an Anthropic API key first.'
+
 export async function importManuscript(text, { onPhase, onProgress, signal } = {}) {
   const { body, referenceText } = splitManuscript(text)
   if (manuscriptNeedsModel(referenceText) && !hasApiKey()) {
-    throw new Error('Some references print no DOI or PMID, so reading them needs Claude — add an Anthropic API key first.')
+    throw new Error(ANTHROPIC_KEY_REQUIRED)
   }
   onPhase?.('references')
   const { references } = await gatherManuscriptReferences(referenceText)
