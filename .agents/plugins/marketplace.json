@@ -1,0 +1,12 @@
+{
+  "name": "paper-trellis",
+  "interface": { "displayName": "Paper Trellis" },
+  "plugins": [
+    {
+      "name": "citation-verifier",
+      "source": { "source": "local", "path": "./plugins/citation-verifier" },
+      "policy": { "installation": "AVAILABLE", "authentication": "ON_USE" },
+      "category": "Education & Research"
+    }
+  ]
+}

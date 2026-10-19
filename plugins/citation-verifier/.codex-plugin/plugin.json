@@ -1,0 +1,19 @@
+{
+  "name": "citation-verifier",
+  "version": "0.1.0",
+  "description": "Audit whether cited papers support manuscript claims, with verified quotations and review exports.",
+  "author": { "name": "Paper Trellis" },
+  "homepage": "https://papertrellis.com",
+  "repository": "https://github.com/MarissaFamularo/citation-verifier",
+  "license": "MIT",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Paper Trellis Citation Verifier",
+    "shortDescription": "Check citation support with evidence you can inspect",
+    "developerName": "Paper Trellis",
+    "category": "Education & Research",
+    "capabilities": ["Read", "Write"],
+    "defaultPrompt": ["Check whether the citations in this manuscript support its claims."],
+    "brandColor": "#166534"
+  }
+}

@@ -2,6 +2,10 @@
 
 A free, standalone tool from [Paper Trellis](https://papertrellis.com).
 
+**Codex plugin prototype:** [installation and usage](plugins/citation-verifier/README.md).
+The plugin uses the active OpenAI model in Codex and local evidence-validation
+helpers, without Anthropic or TypeSafe keys.
+
 **Try it: https://verify.papertrellis.com**
 
 Does the paper a manuscript cites actually support the sentence that cites it?
