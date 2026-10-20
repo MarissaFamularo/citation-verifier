@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Local citation evidence checks. Standard library only; no model API calls."""
+"""Citation evidence checks and recorded reviews through the existing Codex login."""
 import argparse
 import csv
 import hashlib
@@ -12,6 +12,7 @@ import unicodedata
 import urllib.parse
 import urllib.request
 import zipfile
+from model_review import run_review, verified_execution
 from datetime import datetime, timezone
 from pathlib import Path
 from xml.etree import ElementTree as ET
@@ -141,10 +142,13 @@ def missing_numbers(sentence, corpus):
     return missing
 
 
-def finalize_row(row, manuscript, source, *, check_second=True):
+def finalize_row(row, manuscript, source, *, check_second=True, directory="."):
     if row.get("relation") not in RELATIONS:
         raise ValueError("Invalid relation in draft row.")
     result = dict(row)
+    for stale in ("second_pass_validation", "execution", "second_execution", "second_pass_blind",
+                  "quote_span", "source_excerpt", "validation_note"):
+        result.pop(stale, None)
     result.update(verdict="unresolved", quote_verified=False)
     sentence = row.get("sentence")
     if not isinstance(sentence, str) or not sentence.strip() or normalized(sentence) not in normalized(manuscript):
@@ -164,12 +168,19 @@ def finalize_row(row, manuscript, source, *, check_second=True):
     quote = row.get("quote")
     valid_quote = isinstance(quote, str) and bool(quote.strip()) and normalized(quote) in normalized(corpus)
     result["quote_verified"] = bool(valid_quote)
+    if valid_quote:
+        # Offsets refer to the explicitly normalized source, not PDF coordinates.
+        corpus_normalized, quote_normalized = normalized(corpus), normalized(quote)
+        start = corpus_normalized.index(quote_normalized)
+        result["quote_span"] = [start, start + len(quote_normalized)]
+        result["source_excerpt"] = corpus_normalized[max(0, start - 300):start + len(quote_normalized) + 300]
     result["missing_numbers"] = missing_numbers(sentence, corpus)
     relation = row["relation"]
     if relation == "silent":
-        result["verdict"] = "needs_full_text" if source["tier"] != "full_text" else "not_supported"
+        result["verdict"] = "needs_full_text" if source["tier"] != "full_text" else "needs_review"
     elif not valid_quote:
         result.update(verdict="flagged", validation_note="Evidence quote is missing or absent from source text.")
+        result["proposed_quote"] = quote
         result["quote"] = None
     elif relation == "supports":
         result["verdict"] = "flagged" if result["missing_numbers"] else "supported"
@@ -184,13 +195,26 @@ def finalize_row(row, manuscript, source, *, check_second=True):
         else:
             proposal = {"sentence": sentence, "relation": second.get("relation"),
                         "quote": second.get("quote"), "reason": second.get("reason")}
+            if second.get("relation") not in RELATIONS:
+                result.update(verdict="needs_review", validation_note="The second pass has an invalid relation.")
+                return result
             checked = finalize_row(proposal, manuscript, source, check_second=False)
             result["second_pass_validation"] = checked
             if checked["verdict"] != result["verdict"] or second.get("relation") != relation:
                 result.update(verdict="needs_review", validation_note="The two passes disagree or second-pass evidence failed validation.")
-            elif second.get("uncertain") is not False:
+            elif second.get("uncertain") is not False or row.get("uncertain") is not False:
                 result.update(verdict="needs_review", validation_note="The second pass is uncertain or did not record its uncertainty.")
-            result["second_pass_blind"] = second.get("blind") is True
+            first_execution = verified_execution(row, source, directory, row, "first")
+            second_execution = verified_execution(row, source, directory, second, "second")
+            result["execution"] = first_execution
+            result["second_execution"] = second_execution
+            distinct = (first_execution and second_execution
+                        and first_execution["thread_id"] != second_execution["thread_id"]
+                        and first_execution["run_id"] != second_execution["run_id"])
+            result["second_pass_blind"] = bool(distinct)
+            if result["verdict"] in {"supported", "not_supported"} and not distinct:
+                result.update(verdict="needs_second_pass",
+                              validation_note="Two distinct source-only model executions are required; same-context notes do not count.")
     return result
 
 
@@ -208,34 +232,80 @@ def finalize(draft, manuscript, out):
         source = None
         if row.get("source_file"):
             source = json.loads((draft.parent / row["source_file"]).read_text(encoding="utf-8"))
-        results.append(finalize_row(row, manuscript_text, source))
+        results.append(finalize_row(row, manuscript_text, source, directory=draft.parent))
     output = Path(out)
-    save_json(str(output) + ".json", {"version": 1, "checked_at": datetime.now(timezone.utc).isoformat(),
+    save_json(str(output) + ".json", {"version": 2, "checked_at": datetime.now(timezone.utc).isoformat(),
+                                     "evidence_policy": "Preserve quotes, context, hashes, and execution records; do not redact proof from exports.",
                                      "rows": results})
     fields = ["id", "sentence", "reference", "verdict", "relation", "quote", "quote_verified",
               "reason", "source_tier", "source_url", "source_title", "source_identifier", "source_sha256",
-              "model", "second_pass", "second_pass_validation", "second_pass_blind",
+              "model", "execution", "quote_span", "source_excerpt", "proposed_quote",
+              "second_pass", "second_pass_validation", "second_execution", "second_pass_blind",
               "missing_numbers", "validation_note", "human_verdict", "human_notes"]
     buffer = io.StringIO(newline="")
     writer = csv.DictWriter(buffer, fieldnames=fields, extrasaction="ignore")
     writer.writeheader()
     for row in results:
         # Prevent spreadsheet formula execution when users open the export.
+        cells = {key: json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list)) else value
+                 for key, value in row.items()}
         writer.writerow({key: ("'" + value if isinstance(value, str) and value.lstrip().startswith(("=", "+", "-", "@")) else value)
-                         for key, value in row.items()})
+                         for key, value in cells.items()})
     Path(str(output) + ".csv").write_text(buffer.getvalue(), encoding="utf-8")
     return results
+
+
+def check_export(path):
+    """Check an exported report without trusting its quote_verified booleans."""
+    path = Path(path)
+    report = json.loads(path.read_text(encoding="utf-8"))
+    if report.get("version") != 2 or not isinstance(report.get("rows"), list):
+        raise ValueError("Export must be an unmodified version 2 verifier report.")
+    for row in report["rows"]:
+        if row.get("verdict") not in {"supported", "not_supported"}:
+            continue
+        for checked in (row, row.get("second_pass_validation", {})):
+            if (not isinstance(checked.get("quote"), str) or not checked["quote"].strip()
+                    or normalized(checked["quote"]) not in checked.get("source_excerpt", "")):
+                raise ValueError("Export is missing inspectable evidence for " + row["id"])
+        second_judgment = row.get("second_pass", {})
+        if second_judgment.get("quote") != row["second_pass_validation"].get("quote"):
+            raise ValueError("Export lost the second-pass quote for " + row["id"])
+        if (row.get("relation") != second_judgment.get("relation") or row.get("uncertain") is not False
+                or second_judgment.get("uncertain") is not False):
+            raise ValueError("Export claims agreement despite uncertainty/disagreement for " + row["id"])
+        source = json.loads((path.parent / row["source_file"]).read_text(encoding="utf-8"))
+        first = verified_execution(row, source, path.parent, row, "first")
+        second = verified_execution(row, source, path.parent, row.get("second_pass", {}), "second")
+        if not first or not second or first["thread_id"] == second["thread_id"]:
+            raise ValueError("Export has no distinct execution records for " + row["id"])
+        if hashlib.sha256(source["text"].encode()).hexdigest() != row.get("source_sha256"):
+            raise ValueError("Export source hash changed for " + row["id"])
+        if any(normalized(item["quote"]) not in normalized(source["text"])
+               for item in (row, row["second_pass"])):
+            raise ValueError("Export quote is absent from the source for " + row["id"])
+        if row["verdict"] == "supported" and (row["relation"] != "supports" or missing_numbers(row["sentence"], source["text"])):
+            raise ValueError("Export supported verdict failed its evidence gates for " + row["id"])
+    return {"status": "passed", "rows": len(report["rows"]),
+            "scope": "Export integrity and recorded executions; not proof of semantic accuracy."}
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    for name in ("extract", "fetch", "finalize"):
+    for name in ("extract", "fetch", "finalize", "model-review"):
         sub = commands.add_parser(name)
         sub.add_argument("input")
         sub.add_argument("--out", required=True)
         if name == "finalize":
             sub.add_argument("--manuscript", required=True)
+        if name == "model-review":
+            sub.add_argument("--stage", choices=["first", "second"], required=True)
+            sub.add_argument("--model", required=True)
+            sub.add_argument("--effort", choices=["medium", "high"], default="high")
+            sub.add_argument("--timeout", type=int, default=240)
+    sub = commands.add_parser("check-export")
+    sub.add_argument("input")
     args = parser.parse_args()
     try:
         if args.command == "extract":
@@ -246,6 +316,12 @@ def main():
         elif args.command == "fetch":
             save_json(args.out, fetch_source(args.input))
             print(f"Saved source to {args.out}")
+        elif args.command == "model-review":
+            receipt = run_review(args.input, args.out, args.stage, args.model, args.effort, args.timeout)
+            print(json.dumps({"status": receipt["status"], "stage": receipt["stage"],
+                              "model_requested": receipt["model_requested"], "thread_id": receipt["thread_id"]}))
+        elif args.command == "check-export":
+            print(json.dumps(check_export(args.input)))
         else:
             rows = finalize(args.input, args.manuscript, args.out)
             print(json.dumps({"rows": len(rows), "verdicts": {v: sum(r["verdict"] == v for r in rows)
