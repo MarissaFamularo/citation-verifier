@@ -32,3 +32,17 @@ execution, runtime-permission workaround, or external model service was used.
 The evidence bundle retains the original PDF, extraction/provenance, sources,
 actual host captures, reviewer tool traces, receipts, JSON/CSV, validator scripts,
 and validation results. Source text and local logs are not published to GitHub.
+
+## Exact stopped chat recovered
+
+After the user explicitly authorized a diagnostic continuation, the previously
+stopped chat successfully called the direct native tool and acknowledged that its
+prior absence conclusion came from checking ALL_TOOLS. It dispatched fresh agents
+citation_first_2d30326157224b2fa78bfb7a7168d176 and
+citation_second_373fbca224f7435d89f77ccd5bf586c7 for five NEW pairs
+(references 1, 2, 3, 4, 6). Both completed. The repair chat independently reran
+check-export against that saved report: 5 rows, 10 executions passed; CSV round
+trip preserved both judgments and receipts, and human fields remain blank.
+The stopped chat is continuing the full audit; full-manuscript completion is not
+claimed. This confirms recovery in the exact affected chat, beyond the repair
+chat's separate test. The host itself did not require a runtime or permission fix.
