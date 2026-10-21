@@ -54,7 +54,7 @@ directory submission is a separate step; this marketplace is for testing/sharing
 - Source quotations validated after Unicode/whitespace normalization; a missing
   or invented passage cannot produce a supported result.
 - Silent abstracts or partial sources require full text. Unmatched papers stay unresolved.
-- Conservative numerical-token presence checks, source hashes/URLs, and separate
+- Conservative numeric compatibility checks, source hashes/URLs, and separate
   human verdicts and notes in JSON/CSV exports.
 - Two recorded OpenAI reviewer executions with distinct native agent identities. Each input
   excludes both earlier judgments. Same-context notes cannot produce a confirmed
@@ -112,3 +112,19 @@ checkpoint. Reinstalling cannot supply a native host capability.
 This instruction change does not control the desktop host's tool exposure.
 See `validation/continuation-live-five-claim.md` for the live continuation test
 and its limits.
+
+### Numeric compatibility (0.3.2)
+
+Numeric checks normalize percent spelling, grouped digits, Unicode minus signs,
+and decimal middledots. Explicit inequalities require matching units. Rounding
+is limited to positive integer person counts with an explicit approximation word;
+“nearly” and “almost” also require a smaller source count. Written rounding precision
+is capped at two significant digits. Exact values, risks, percentages and doses
+receive no rounding tolerance. Percent-table inference is limited to point estimates
+followed by an SE under a nearby percent (SE) heading; it is not a general table parser.
+
+JSON/CSV exports retain numeric match methods and source locations. Numeric source
+spans refer to text after NFKC, Unicode-minus and decimal-middledot normalization.
+Numeric compatibility does not establish endpoint, population, study design or
+effect attribution; both blind source reviews and human adjudication remain necessary.
+The synthetic numeric regression controls contain no manuscript or audit fixtures.

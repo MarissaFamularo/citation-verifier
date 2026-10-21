@@ -17,6 +17,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
+from numeric_evidence import missing_numbers, numeric_checks
+
 MAX_BYTES = 40_000_000
 RELATIONS = {"supports", "contradicts", "off_topic", "silent"}
 
@@ -127,21 +129,6 @@ def normalized(text):
     return " ".join(unicodedata.normalize("NFKC", str(text)).split())
 
 
-def missing_numbers(sentence, corpus):
-    # Conservative token presence only. No claim of units or statistical equivalence.
-    sentence = re.sub(r"\[[\d\s,;–—-]+\]|\^\{[^}]+\}", "", sentence)
-    pattern = r"(?<![\w.])-?\d+(?:,\d{3})*(?:\.\d+)?%?"
-    source_tokens = {t.replace(",", "") for t in re.findall(pattern, normalized(corpus))}
-    missing = []
-    for token in re.findall(pattern, normalized(sentence)):
-        number = float(token.replace(",", "").rstrip("%"))
-        if token.isdigit() and (number <= 12 or 1900 <= number <= 2100):
-            continue
-        if token.replace(",", "") not in source_tokens and token not in missing:
-            missing.append(token)
-    return missing
-
-
 def finalize_row(row, manuscript, source, *, check_second=True, directory="."):
     if row.get("relation") not in RELATIONS:
         raise ValueError("Invalid relation in draft row.")
@@ -175,6 +162,7 @@ def finalize_row(row, manuscript, source, *, check_second=True, directory="."):
         result["quote_span"] = [start, start + len(quote_normalized)]
         result["source_excerpt"] = corpus_normalized[max(0, start - 300):start + len(quote_normalized) + 300]
     result["missing_numbers"] = missing_numbers(sentence, corpus)
+    result["numeric_checks"] = numeric_checks(sentence, corpus)
     relation = row["relation"]
     if relation == "silent":
         result["verdict"] = "needs_full_text" if source["tier"] != "full_text" else "needs_review"
@@ -185,7 +173,7 @@ def finalize_row(row, manuscript, source, *, check_second=True, directory="."):
     elif relation == "supports":
         result["verdict"] = "flagged" if result["missing_numbers"] else "supported"
         if result["missing_numbers"]:
-            result["validation_note"] = "Claim numbers absent from source; inspect manually."
+            result["validation_note"] = "Claim numbers lack a compatible source value under conservative formatting, bound, and explicit count-rounding checks; inspect manually."
     else:
         result["verdict"] = "not_supported"
     if check_second:
@@ -245,7 +233,7 @@ def finalize(draft, manuscript, out):
               "reason", "source_tier", "source_url", "source_title", "source_identifier", "source_sha256",
               "model", "execution", "quote_span", "source_excerpt", "proposed_quote",
               "second_pass", "second_pass_validation", "second_execution", "second_pass_blind",
-              "missing_numbers", "validation_note", "human_verdict", "human_notes"]
+              "missing_numbers", "numeric_checks", "validation_note", "human_verdict", "human_notes"]
     buffer = io.StringIO(newline="")
     writer = csv.DictWriter(buffer, fieldnames=fields, extrasaction="ignore")
     writer.writeheader()
@@ -292,7 +280,7 @@ def check_export(path):
             expected = finalize_row(replay, row["sentence"], source, directory=path.parent)
             for key in ("source_sha256", "source_url", "source_title", "source_identifier",
                         "source_tier", "quote_span", "source_excerpt", "second_pass_validation",
-                        "second_pass_blind"):
+                        "second_pass_blind", "missing_numbers", "numeric_checks"):
                 if row.get(key) != expected.get(key):
                     raise ValueError("Export evidence field changed: " + key + " for " + row["id"])
         if row.get("verdict") not in {"supported", "not_supported"}:
