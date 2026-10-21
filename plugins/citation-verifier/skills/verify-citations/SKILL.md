@@ -11,7 +11,27 @@ runtime state into it or retry runtime-directory permission workarounds.
 
 Native subagents use the current product session; no separate API key is needed.
 Availability is host-specific. Do not infer support merely from an installed CLI.
-If native agents are unavailable, explain the blocker and leave reviews pending.
+This skill explicitly requires native reviewer subagents for each batch, including
+continuation turns. The user's request to continue this workflow retains that
+requirement; do not interpret a short follow-up as withdrawal of authorization.
+
+At the start of each batch, inspect the directly exposed native collaboration tools,
+not only a deferred-tool registry such as `ALL_TOOLS`: native tools may be absent
+from that registry while available as direct calls. If `collaboration.list_agents`
+is exposed, call it to check the current host. Invoke native collaboration tools
+directly, never through `functions.exec` or its `tools` object. A successful list
+call establishes access to that tool; only actual dispatch and completion establish
+reviewer execution. Do not report runtime failure without an actual error. If the
+required tools are not exposed, record that as `tool_not_exposed`, with the current
+turn's observation, rather than claiming a failed model execution.
+
+If native agents really are unavailable, preserve completed reviews and continue
+useful extraction, citation mapping, and source retrieval within the requested
+scope. Keep new model reviews pending and save a resumable checkpoint naming the
+last completed batch, remaining pair IDs, input files, and exact capability blocker.
+Do not ask the user to reinstall, change runtime permissions, or repeat the same
+request as a purported fix. Clearly distinguish host tool availability from plugin
+version and from a model execution error.
 A separate API or hosted model service would require credentials, possible billing,
 and manuscript transfer; explain these requirements before proposing or making
 that architecture change. Do not silently fall back to nested `codex exec`.

@@ -98,3 +98,17 @@ Validation results are recorded in `validation/live-five-claim.md`. Automated
 fixtures are regression tests, never evidence that live reviewer calls succeeded.
 The legacy `model-review` command is retained only as an explicitly chosen CLI
 option in an environment already known to support it; Work must not auto-fallback.
+
+### Continuing an audit (0.3.1)
+
+The plugin explicitly requests native reviewer subagents on every batch and
+continuation turn. Its Try now prompt includes that requirement. Native tools
+must be checked directly; their absence from a deferred-tool registry is not
+evidence that the host lacks them. Record an actual dispatch error separately
+from a tool that is not exposed at all. If the host does not expose the tools,
+preserve results and continue extraction/source preparation, saving a resumable
+checkpoint. Reinstalling cannot supply a native host capability.
+
+This instruction change does not control the desktop host's tool exposure.
+See `validation/continuation-live-five-claim.md` for the live continuation test
+and its limits.

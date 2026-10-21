@@ -1,6 +1,6 @@
 {
   "name": "citation-verifier",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Audit whether cited papers support manuscript claims, with verified quotations and review exports.",
   "author": { "name": "Paper Trellis" },
   "homepage": "https://papertrellis.com",
@@ -13,7 +13,7 @@
     "developerName": "Paper Trellis",
     "category": "Education & Research",
     "capabilities": ["Read", "Write"],
-    "defaultPrompt": ["Check whether the citations in this manuscript support its claims."],
+    "defaultPrompt": ["Check whether the citations in this manuscript support its claims using two fresh native reviewer subagents per batch, with neither reviewer seeing the other verdict. Continue all requested batches and preserve evidence and human verdicts."],
     "brandColor": "#166534"
   }
 }
