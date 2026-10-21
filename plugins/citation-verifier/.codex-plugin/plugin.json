@@ -1,6 +1,6 @@
 {
   "name": "citation-verifier",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Audit whether cited papers support manuscript claims, with verified quotations and review exports.",
   "author": { "name": "Paper Trellis" },
   "homepage": "https://papertrellis.com",

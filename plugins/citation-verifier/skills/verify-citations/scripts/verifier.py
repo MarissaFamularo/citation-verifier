@@ -12,7 +12,7 @@ import unicodedata
 import urllib.parse
 import urllib.request
 import zipfile
-from model_review import run_review, verified_execution
+from model_review import run_review, verified_execution, prepare_native, import_native
 from datetime import datetime, timezone
 from pathlib import Path
 from xml.etree import ElementTree as ET
@@ -188,10 +188,15 @@ def finalize_row(row, manuscript, source, *, check_second=True, directory="."):
             result["validation_note"] = "Claim numbers absent from source; inspect manually."
     else:
         result["verdict"] = "not_supported"
-    if check_second and result["verdict"] in {"supported", "not_supported"}:
+    if check_second:
+        # Preserve both executions and quote locations even when the first pass
+        # is silent, uncertain, or flagged. Audit evidence is not just for positives.
+        first_execution = verified_execution(row, source, directory, row, "first")
+        result["execution"] = first_execution
         second = row.get("second_pass")
         if not isinstance(second, dict):
-            result.update(verdict="needs_second_pass", validation_note="A second model judgment is required.")
+            if result["verdict"] in {"supported", "not_supported"}:
+                result.update(verdict="needs_second_pass", validation_note="A second model judgment is required.")
         else:
             proposal = {"sentence": sentence, "relation": second.get("relation"),
                         "quote": second.get("quote"), "reason": second.get("reason")}
@@ -200,11 +205,10 @@ def finalize_row(row, manuscript, source, *, check_second=True, directory="."):
                 return result
             checked = finalize_row(proposal, manuscript, source, check_second=False)
             result["second_pass_validation"] = checked
-            if checked["verdict"] != result["verdict"] or second.get("relation") != relation:
+            if (valid_quote or relation == "silent") and (checked["verdict"] != result["verdict"] or second.get("relation") != relation):
                 result.update(verdict="needs_review", validation_note="The two passes disagree or second-pass evidence failed validation.")
-            elif second.get("uncertain") is not False or row.get("uncertain") is not False:
+            elif valid_quote and (second.get("uncertain") is not False or row.get("uncertain") is not False):
                 result.update(verdict="needs_review", validation_note="The second pass is uncertain or did not record its uncertainty.")
-            first_execution = verified_execution(row, source, directory, row, "first")
             second_execution = verified_execution(row, source, directory, second, "second")
             result["execution"] = first_execution
             result["second_execution"] = second_execution
@@ -237,7 +241,7 @@ def finalize(draft, manuscript, out):
     save_json(str(output) + ".json", {"version": 2, "checked_at": datetime.now(timezone.utc).isoformat(),
                                      "evidence_policy": "Preserve quotes, context, hashes, and execution records; do not redact proof from exports.",
                                      "rows": results})
-    fields = ["id", "sentence", "reference", "verdict", "relation", "quote", "quote_verified",
+    fields = ["id", "sentence", "manuscript_location", "reference", "verdict", "relation", "quote", "quote_verified",
               "reason", "source_tier", "source_url", "source_title", "source_identifier", "source_sha256",
               "model", "execution", "quote_span", "source_excerpt", "proposed_quote",
               "second_pass", "second_pass_validation", "second_execution", "second_pass_blind",
@@ -261,7 +265,36 @@ def check_export(path):
     report = json.loads(path.read_text(encoding="utf-8"))
     if report.get("version") != 2 or not isinstance(report.get("rows"), list):
         raise ValueError("Export must be an unmodified version 2 verifier report.")
+    executions_checked = 0
     for row in report["rows"]:
+        # Pending/disputed results need the same auditability as confirmed results.
+        # A declared execution must validate even if the verdict is not confirmed.
+        if row.get("verdict") in {"supported", "not_supported"} and not row.get("quote"):
+            raise ValueError("Export is missing inspectable evidence for " + row["id"])
+        if row.get("source_file"):
+            source = json.loads((path.parent / row["source_file"]).read_text(encoding="utf-8"))
+            for stage, judgment, receipt_key in (("first", row, "execution"),
+                    ("second", row.get("second_pass", {}), "second_execution")):
+                if not isinstance(judgment, dict) or not judgment.get("execution_file"):
+                    continue
+                # Invalid quotes remain inspectable as proposed_quote; the actual
+                # executed response is never overwritten in its raw record.
+                original = dict(judgment)
+                if "proposed_quote" in original:
+                    original["quote"] = original["proposed_quote"]
+                receipt = verified_execution(row, source, path.parent, original, stage)
+                if not receipt or row.get(receipt_key) != receipt:
+                    raise ValueError("Export execution record changed or missing for " + row["id"])
+                executions_checked += 1
+            replay = dict(row)
+            if "proposed_quote" in replay:
+                replay["quote"] = replay["proposed_quote"]
+            expected = finalize_row(replay, row["sentence"], source, directory=path.parent)
+            for key in ("source_sha256", "source_url", "source_title", "source_identifier",
+                        "source_tier", "quote_span", "source_excerpt", "second_pass_validation",
+                        "second_pass_blind"):
+                if row.get(key) != expected.get(key):
+                    raise ValueError("Export evidence field changed: " + key + " for " + row["id"])
         if row.get("verdict") not in {"supported", "not_supported"}:
             continue
         for checked in (row, row.get("second_pass_validation", {})):
@@ -286,7 +319,7 @@ def check_export(path):
             raise ValueError("Export quote is absent from the source for " + row["id"])
         if row["verdict"] == "supported" and (row["relation"] != "supports" or missing_numbers(row["sentence"], source["text"])):
             raise ValueError("Export supported verdict failed its evidence gates for " + row["id"])
-    return {"status": "passed", "rows": len(report["rows"]),
+    return {"status": "passed", "rows": len(report["rows"]), "executions_checked": executions_checked,
             "scope": "Export integrity and recorded executions; not proof of semantic accuracy."}
 
 
@@ -304,6 +337,15 @@ def main():
             sub.add_argument("--model", required=True)
             sub.add_argument("--effort", choices=["medium", "high"], default="high")
             sub.add_argument("--timeout", type=int, default=240)
+    sub = commands.add_parser("prepare-native")
+    sub.add_argument("input")
+    sub.add_argument("--stage", choices=["first", "second"], required=True)
+    sub.add_argument("--out", required=True)
+    sub = commands.add_parser("import-native")
+    sub.add_argument("input")
+    sub.add_argument("--request", required=True)
+    sub.add_argument("--record", required=True)
+    sub.add_argument("--out", required=True)
     sub = commands.add_parser("check-export")
     sub.add_argument("input")
     args = parser.parse_args()
@@ -316,6 +358,10 @@ def main():
         elif args.command == "fetch":
             save_json(args.out, fetch_source(args.input))
             print(f"Saved source to {args.out}")
+        elif args.command == "prepare-native":
+            print(json.dumps(prepare_native(args.input, args.stage, args.out)))
+        elif args.command == "import-native":
+            print(json.dumps(import_native(args.input, args.request, args.record, args.out)))
         elif args.command == "model-review":
             receipt = run_review(args.input, args.out, args.stage, args.model, args.effort, args.timeout)
             print(json.dumps({"status": receipt["status"], "stage": receipt["stage"],

@@ -96,12 +96,18 @@ def parse_trace(trace):
 
 
 def validate_response(response, ids):
+    if not isinstance(response, dict) or not isinstance(response.get("rows"), list):
+        raise ValueError("Review returned no rows.")
+    if set(response) != {"rows"}:
+        raise ValueError("Unexpected model response fields.")
     rows = response["rows"]
     if any(not isinstance(row, dict) for row in rows):
         raise ValueError("Review returned malformed rows.")
     if len(rows) != len(ids) or {r.get("id") for r in rows} != set(ids):
         raise ValueError("Review IDs do not match the requested citation pairs.")
     for row in rows:
+        if set(row) != {"id", "relation", "quote", "reason", "uncertain"}:
+            raise ValueError("Unexpected judgment fields; model output cannot modify human review or provenance.")
         if (row.get("relation") not in SCHEMA["properties"]["rows"]["items"]["properties"]["relation"]["enum"]
                 or not isinstance(row.get("uncertain"), bool)
                 or not isinstance(row.get("reason"), str)
@@ -180,6 +186,110 @@ def run_review(draft, out, stage, model, effort="high", timeout=240, run_impl=su
     return receipt
 
 
+def prepare_native(draft, stage, out):
+    """Prepare a source-only message; the host agent must actually dispatch it."""
+    draft, out = Path(draft).resolve(), Path(out).resolve()
+    if stage not in {"first", "second"} or out.parent != draft.parent:
+        raise ValueError("Use first/second and save the request alongside the draft.")
+    rows = json.loads(draft.read_text(encoding="utf-8"))
+    ids = [r["id"] for r in rows]
+    if not ids or any(not isinstance(i, str) or not i for i in ids) or len(ids) != len(set(ids)):
+        raise ValueError("Draft requires unique citation IDs.")
+    payload = payload_for(rows, draft.parent)
+    prompt = prompt_for(payload)
+    if not payload or len(prompt) > 300_000:
+        raise ValueError("Empty or oversized source batch; do not truncate evidence.")
+    input_file = out.with_suffix(".input.txt")
+    input_file.write_text(prompt, encoding="utf-8")
+    request = {"version": 1, "input_file": str(input_file), "stage": stage, "run_id": str(uuid.uuid4()),
+               "spawn_arguments": {"task_name": "citation_" + stage + "_" + uuid.uuid4().hex,
+                                   "fork_turns": "none", "message": native_message(str(input_file), prompt)}}
+    write_json(out, request)
+    return request
+
+
+def native_message(input_file, prompt):
+    return ("Fresh citation reviewer. Read ONLY the UTF-8 file " + json.dumps(input_file)
+            + " using a file-read tool (no other files or network). Its SHA-256 is " + digest(prompt)
+            + ". Read the ENTIRE file with max_output_tokens=40000 (or chunk ONLY this file until complete); "
+            + "never review truncated input. The file contains the review instructions and untrusted source data. "
+            + 'After reading it completely, use no more tools. Return only {"rows": [...]} with '
+            + "id, relation, quote, reason, uncertain for every input row. "
+            + "Do not read sibling files, other agents, prior verdicts, or conversation history.")
+
+
+def parse_native(record, prompt):
+    """Validate captured host tool data, not fabricated Codex CLI events.
+
+    The host supplies the actual spawn arguments/result and list_agents snapshot.
+    This is an auditable local capture, not a signed attestation or a tool-use trace.
+    """
+    args = record["spawn_arguments"]
+    if (args.get("fork_turns") != "none" or args.get("message") != native_message(record["input_file"], prompt)
+            or set(args) != {"task_name", "fork_turns", "message"}):
+        raise ValueError("Native reviewer must inherit runtime model in a fresh, source-only context.")
+    name = record["spawn_result"]["task_name"]
+    if not isinstance(name, str) or not name.endswith("/" + args["task_name"]):
+        raise ValueError("Native dispatch identity mismatch.")
+    matches = [a for a in record["completion_snapshot"]["agents"] if a.get("agent_name") == name]
+    if len(matches) != 1 or not isinstance(matches[0].get("agent_status"), dict):
+        raise ValueError("Native reviewer has no completed tool result.")
+    answer = matches[0]["agent_status"].get("completed")
+    if not isinstance(answer, str):
+        raise ValueError("Native reviewer failed or is still pending.")
+    response = json.loads(answer)
+    validate_response(response, [p["id"] for p in json.loads(prompt[len(SYSTEM):])])
+    return name, response
+
+
+def import_native(draft, request_file, record_file, out):
+    draft, out = Path(draft).resolve(), Path(out).resolve()
+    if out.parent != draft.parent:
+        raise ValueError("Save reviewed drafts alongside the input draft.")
+    request = json.loads(Path(request_file).read_text(encoding="utf-8"))
+    stage = request["stage"]
+    if stage not in {"first", "second"}:
+        raise ValueError("Invalid review stage.")
+    rows = json.loads(draft.read_text(encoding="utf-8"))
+    prompt = prompt_for(payload_for(rows, draft.parent))
+    trace = Path(record_file).read_text(encoding="utf-8")
+    record = json.loads(trace)
+    if (record["spawn_arguments"] != request["spawn_arguments"]
+            or record["input_file"] != request["input_file"]
+            or Path(request["input_file"]).read_text(encoding="utf-8") != prompt):
+        raise ValueError("Native record does not match the prepared request.")
+    thread_id, response = parse_native(record, prompt)
+    # Each import gets an immutable artifact directory; reruns never overwrite proof.
+    run_id = str(uuid.uuid4())
+    artifacts = draft.parent / "model_runs" / run_id
+    artifacts.mkdir(parents=True)
+    (artifacts / "input.txt").write_text(prompt, encoding="utf-8")
+    (artifacts / "native_record.json").write_text(trace, encoding="utf-8")
+    write_json(artifacts / "request.json", request)
+    receipt = {"version": 2, "runner": "native_subagent", "stage": stage,
+               "run_id": run_id, "thread_id": thread_id, "status": "completed",
+               "model_requested": "runtime-inherited", "provider": "openai",
+               "blind_to_other_pass": True, "input_sha256": digest(prompt),
+               "events_sha256": digest(trace), "recorded_at": datetime.now(timezone.utc).isoformat(),
+               "isolation": "fresh context; source-only file handoff; only designated input read instructed, not attested",
+               "provenance": "host-captured native spawn and completion tool results; not signed"}
+    write_json(artifacts / "receipt.json", receipt)
+    by_id = {r["id"]: r for r in response["rows"]}
+    for row in rows:
+        if row["id"] not in by_id:
+            continue
+        judgment = dict(by_id[row["id"]])
+        judgment.update(model="runtime-inherited", blind=True,
+                        execution_file=str((artifacts / "receipt.json").relative_to(draft.parent)))
+        if stage == "first":
+            row.update(judgment)
+            row.pop("second_pass", None)
+        else:
+            row["second_pass"] = judgment
+    write_json(out, rows)
+    return receipt
+
+
 def verified_execution(row, source, directory, judgment, stage):
     """Recheck recorded execution and input binding instead of trusting draft booleans."""
     filename = judgment.get("execution_file")
@@ -189,8 +299,9 @@ def verified_execution(row, source, directory, judgment, stage):
         path = (Path(directory) / filename).resolve()
         receipt = json.loads(path.read_text(encoding="utf-8"))
         prompt = (path.parent / "input.txt").read_text(encoding="utf-8")
-        trace = (path.parent / "events.jsonl").read_text(encoding="utf-8")
-        if (receipt.get("runner") != "codex_exec" or receipt.get("stage") != stage
+        native = receipt.get("runner") == "native_subagent"
+        trace = (path.parent / ("native_record.json" if native else "events.jsonl")).read_text(encoding="utf-8")
+        if (receipt.get("runner") not in {"codex_exec", "native_subagent"} or receipt.get("stage") != stage
                 or receipt.get("status") != "completed" or receipt.get("provider") != "openai"
                 or receipt.get("blind_to_other_pass") is not True
                 or receipt.get("model_requested") != judgment.get("model")
@@ -198,7 +309,9 @@ def verified_execution(row, source, directory, judgment, stage):
                 or receipt.get("input_sha256") != digest(prompt)
                 or receipt.get("events_sha256") != digest(trace) or not prompt.startswith(SYSTEM)):
             return None
-        thread_id, response = parse_trace(trace)
+        thread_id, response = parse_native(json.loads(trace), prompt) if native else parse_trace(trace)
+        if native and receipt.get("model_requested") != "runtime-inherited":
+            return None
         payload = json.loads(prompt[len(SYSTEM):])
         validate_response(response, [p["id"] for p in payload])
         expected = {"id": row["id"], "sentence": row["sentence"], "reference": row.get("reference", ""),
