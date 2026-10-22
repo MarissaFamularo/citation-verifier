@@ -22,7 +22,27 @@ export function itemsFromTextContent(textContent) {
     }))
 }
 
+// pdf.js reads page text with `for await (... of readableStream)`. Safari (iOS
+// included) has no async iterator on ReadableStream, which surfaces as
+// "undefined is not a function (near '...i of e...')". Add one if missing.
+export function ensureReadableStreamAsyncIterator(RS = globalThis.ReadableStream) {
+  if (!RS || typeof RS.prototype[Symbol.asyncIterator] === 'function') return
+  RS.prototype[Symbol.asyncIterator] = async function* readableStreamIterator() {
+    const reader = this.getReader()
+    try {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) return
+        yield value
+      }
+    } finally {
+      reader.releaseLock()
+    }
+  }
+}
+
 export async function extractPdfText(arrayBuffer) {
+  ensureReadableStreamAsyncIterator()
   const pdfjs = await import('pdfjs-dist')
   const { default: workerSrc } = await import('pdfjs-dist/build/pdf.worker.min.mjs?url')
   pdfjs.GlobalWorkerOptions.workerSrc = workerSrc
