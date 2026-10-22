@@ -27,6 +27,13 @@ uncertain=true for ambiguous attribution, partial claims, or inconclusive eviden
 Keep each supplied id unchanged and include every id exactly once.
 DATA follows as JSON:\n"""
 
+LEGACY_SYSTEM = SYSTEM
+SYSTEM = SYSTEM.replace("each pair's source_text", "each pair's referenced source text").replace("DATA follows as JSON:\n", "") + (
+    "DATA version 2 has pairs and sources. Resolve each pair.source_id ONLY to the matching "
+    "sources key; never use another source. Pair metadata describes that pair's source identity. "
+    "The whole sentence is context, not an assigned clause. Identify an exact clause only when "
+    "its mapping is established by the text; otherwise explain ambiguity and set uncertain=true.\nDATA follows as JSON:\n")
+
 SCHEMA = {
     "type": "object", "additionalProperties": False, "required": ["rows"],
     "properties": {"rows": {"type": "array", "items": {
@@ -60,11 +67,58 @@ def payload_for(rows, directory):
                         "reference": row.get("reference", ""), "source_title": source.get("title"),
                         "source_identifier": source.get("identifier"), "source_tier": source["tier"],
                         "source_text": source["text"]})
-    return payload
+    return compact_payload(payload)
+
+
+def compact_payload(legacy):
+    sources, pairs = {}, []
+    for item in legacy:
+        pair = dict(item)
+        text = pair.pop("source_text")
+        source_id = digest(text)
+        sources[source_id] = text
+        pair["source_id"] = source_id
+        pairs.append(pair)
+    return {"version": 2, "sources": sources, "pairs": pairs}
+
+
+def expanded_payload(payload):
+    """Resolve new transport strictly; old list inputs remain verifiable."""
+    if isinstance(payload, list):
+        pairs = payload
+    else:
+        if not isinstance(payload, dict) or set(payload) != {"version", "sources", "pairs"} or payload["version"] != 2:
+            raise ValueError("Invalid review payload version.")
+        sources = payload["sources"]
+        if not isinstance(sources, dict) or any(not isinstance(t, str) or digest(t) != k for k, t in sources.items()):
+            raise ValueError("Source content hash mismatch.")
+        pairs = []
+        used = set()
+        for item in payload["pairs"]:
+            pair = dict(item)
+            key = pair.pop("source_id")
+            if "source_text" in pair or key not in sources:
+                raise ValueError("Invalid pair source binding.")
+            used.add(key)
+            pair["source_text"] = sources[key]
+            pairs.append(pair)
+        if used != set(sources):
+            raise ValueError("Unreferenced source evidence.")
+    ids = [p["id"] for p in pairs]
+    if len(ids) != len(set(ids)):
+        raise ValueError("Duplicate review pair IDs.")
+    return pairs
+
+
+def payload_from_prompt(prompt):
+    for prefix in (SYSTEM, LEGACY_SYSTEM):
+        if prompt.startswith(prefix):
+            return expanded_payload(json.loads(prompt[len(prefix):]))
+    raise ValueError("Unknown review instructions.")
 
 
 def prompt_for(payload):
-    return SYSTEM + json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    return (LEGACY_SYSTEM if isinstance(payload, list) else SYSTEM) + json.dumps(payload, ensure_ascii=False, sort_keys=True)
 
 
 def parse_trace(trace):
@@ -132,8 +186,9 @@ def run_review(draft, out, stage, model, effort="high", timeout=240, run_impl=su
     ids = [r.get("id") for r in rows]
     if not ids or any(not isinstance(i, str) or not i for i in ids) or len(ids) != len(set(ids)):
         raise ValueError("Draft requires unique citation IDs.")
+    guard_saved_reviews(rows, stage, out)
     payload = payload_for(rows, draft.parent)
-    if not payload:
+    if not expanded_payload(payload):
         raise ValueError("No source-backed rows are available for model review.")
     prompt = prompt_for(payload)
     # Never silently truncate evidence to fit an unknown model context window.
@@ -164,7 +219,7 @@ def run_review(draft, out, stage, model, effort="high", timeout=240, run_impl=su
     if result.returncode:
         raise ValueError("Codex review failed; inspect model_runs/" + run_id + "/stderr.txt. No judgment accepted.")
     thread_id, response = parse_trace(result.stdout)
-    validate_response(response, [p["id"] for p in payload])
+    validate_response(response, [p["id"] for p in expanded_payload(payload)])
     receipt = {"version": 1, "runner": "codex_exec", "stage": stage,
                "run_id": run_id, "thread_id": thread_id, "status": "completed",
                "model_requested": model, "reasoning_effort": effort, "provider": "openai",
@@ -186,7 +241,107 @@ def run_review(draft, out, stage, model, effort="high", timeout=240, run_impl=su
     return receipt
 
 
-def prepare_native(draft, stage, out):
+def selection_for(capabilities=None, model=None):
+    """Capabilities must come from the current host schema, never a guessed ID."""
+    if capabilities is None:
+        if model:
+            raise ValueError("Explicit native selection requires current host capabilities JSON.")
+        return {"model_requested": "runtime-inherited", "backend_verified": False,
+                "limitation": "Model/cost unknown. Inspect current spawn schema and supply capabilities before dispatch; inheritance is not a lower-cost guarantee."}
+    profile = json.loads(Path(capabilities).read_text(encoding="utf-8"))
+    models = profile.get("models")
+    if (profile.get("version") != 1 or profile.get("tool") != "collaboration.spawn_agent"
+            or profile.get("fork_turns_none") is not True or profile.get("model_argument") is not True
+            or not isinstance(profile.get("observation"), str) or not profile["observation"].strip()
+            or not isinstance(models, list) or not models
+            or any(not isinstance(m, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]+", m) for m in models)
+            or profile.get("lower_cost_default") not in models):
+        raise ValueError("Require a current observed host model-selection capability profile.")
+    chosen = model or profile["lower_cost_default"]
+    if chosen not in models:
+        raise ValueError("Requested model is not in the observed host capabilities.")
+    return {"model_requested": chosen, "backend_verified": False,
+            "capabilities": profile, "capabilities_sha256": digest(json.dumps(profile, sort_keys=True)),
+            "provenance": "Explicit requested host model; profile is operator-observed, not provider attestation."}
+
+
+def selected_rows(rows, pair_ids=None):
+    ids = [r["id"] for r in rows]
+    if not ids or any(not isinstance(i, str) or not i for i in ids) or len(ids) != len(set(ids)):
+        raise ValueError("Draft requires unique citation IDs.")
+    if pair_ids is None:
+        return rows
+    if not pair_ids or len(pair_ids) != len(set(pair_ids)) or not set(pair_ids) <= set(ids):
+        raise ValueError("Explicit batch IDs must be unique and present in the draft.")
+    return [r for r in rows if r["id"] in pair_ids]
+
+
+def guard_saved_reviews(rows, stage, out):
+    if Path(out).exists():
+        raise ValueError("Output already exists; preserve saved judgments and choose a new output.")
+    for row in rows:
+        prior = row if stage == "first" else row.get("second_pass", {})
+        if prior.get("execution_file") or (stage == "first" and row.get("second_pass", {}).get("execution_file")):
+            raise ValueError("Batch includes saved executions; resume only explicit pending pair IDs. Preserve the original draft.")
+
+
+def preflight(draft, batch_size=8, max_chars=300_000, capabilities=None, model=None):
+    """Offline work envelope, not a quota/token/cost estimator. No dispatch."""
+    if batch_size < 1 or not 1 <= max_chars <= 300_000:
+        raise ValueError("Use positive batch size and 1..300000 max prompt characters.")
+    draft = Path(draft)
+    rows = json.loads(draft.read_text(encoding="utf-8"))
+    selected_rows(rows)
+    payload = payload_for(rows, draft.parent)
+    pairs = expanded_payload(payload)
+    by_id = {r["id"]: r for r in rows}
+    states, plans, oversized = {}, [], []
+    for stage in ("first", "second"):
+        pending = []
+        states[stage] = {"completed": [], "pending": [], "blocked_saved_execution": []}
+        for pair in pairs:
+            row = by_id[pair["id"]]
+            judgment = row if stage == "first" else row.get("second_pass", {})
+            if judgment.get("execution_file"):
+                source = json.loads((draft.parent / row["source_file"]).read_text(encoding="utf-8"))
+                key = "completed" if verified_execution(row, source, draft.parent, judgment, stage) else "blocked_saved_execution"
+            elif stage == "first" and row.get("second_pass", {}).get("execution_file"):
+                key = "blocked_saved_execution"
+            else:
+                key = "pending"
+                pending.append(pair)
+            states[stage][key].append(row["id"])
+        batch = []
+        for pair in pending:
+            candidate = batch + [pair]
+            if batch and (len(candidate) > batch_size or len(prompt_for(compact_payload(candidate))) > max_chars):
+                plans.append({"stage": stage, "pair_ids": [p["id"] for p in batch],
+                              "prompt_bytes": len(prompt_for(compact_payload(batch)).encode("utf-8"))})
+                batch = []
+            if len(prompt_for(compact_payload([pair]))) > max_chars:
+                oversized.append({"stage": stage, "pair_id": pair["id"], "action": "Supply an explicit evidence strategy; never truncate."})
+            else:
+                batch.append(pair)
+        if batch:
+            plans.append({"stage": stage, "pair_ids": [p["id"] for p in batch],
+                          "prompt_bytes": len(prompt_for(compact_payload(batch)).encode("utf-8"))})
+    return {"version": 1, "draft": str(draft.resolve()), "scope_sha256": digest(prompt_for(payload)),
+            "pairs": len(rows), "source_backed_pairs": len(pairs),
+            "unavailable_pair_ids": [r["id"] for r in rows if not r.get("source_file")],
+            "unique_references": len({r.get("reference") or r.get("source_file") or r["id"] for r in rows}),
+            "unique_source_files": len({r["source_file"] for r in rows if r.get("source_file")}),
+            "unique_source_texts": len(payload["sources"]),
+            "payload_bytes_before": len(prompt_for(pairs).encode("utf-8")),
+            "payload_bytes_after": len(prompt_for(payload).encode("utf-8")),
+            "stages": states, "batch_size": batch_size, "max_prompt_chars": max_chars,
+            "planned_review_batches": len(plans), "planned_judgments": sum(len(b["pair_ids"]) for b in plans),
+            "planned_prompt_bytes": sum(b["prompt_bytes"] for b in plans),
+            "batches": plans, "oversized": oversized, "model_selection": selection_for(capabilities, model),
+            "scope_policy": "All pairs retained; two distinct reviews required. Approve the full work envelope before a large run. Resume explicit pending IDs only; re-run preflight after imports.",
+            "units": "UTF-8 bytes, pairs, judgments and batches are work units; payload reduction is not measured quota/cost savings."}
+
+
+def prepare_native(draft, stage, out, pair_ids=None, capabilities=None, model=None, allow_inherited_model=False):
     """Prepare a source-only message; the host agent must actually dispatch it."""
     draft, out = Path(draft).resolve(), Path(out).resolve()
     if stage not in {"first", "second"} or out.parent != draft.parent:
@@ -195,15 +350,27 @@ def prepare_native(draft, stage, out):
     ids = [r["id"] for r in rows]
     if not ids or any(not isinstance(i, str) or not i for i in ids) or len(ids) != len(set(ids)):
         raise ValueError("Draft requires unique citation IDs.")
+    rows = selected_rows(rows, pair_ids)
+    guard_saved_reviews(rows, stage, out)
+    selection = selection_for(capabilities, model)
+    if selection["model_requested"] == "runtime-inherited" and not allow_inherited_model:
+        raise ValueError("Model/cost unknown: supply current host capabilities or explicitly allow inherited model. No request prepared.")
     payload = payload_for(rows, draft.parent)
     prompt = prompt_for(payload)
-    if not payload or len(prompt) > 300_000:
+    if not expanded_payload(payload) or len(prompt) > 300_000:
         raise ValueError("Empty or oversized source batch; do not truncate evidence.")
     input_file = out.with_suffix(".input.txt")
+    if out.exists() or input_file.exists():
+        raise ValueError("Prepared request/input already exists; choose new paths.")
     input_file.write_text(prompt, encoding="utf-8")
     request = {"version": 1, "input_file": str(input_file), "stage": stage, "run_id": str(uuid.uuid4()),
                "spawn_arguments": {"task_name": "citation_" + stage + "_" + uuid.uuid4().hex,
                                    "fork_turns": "none", "message": native_message(str(input_file), prompt)}}
+    request["version"] = 2
+    request["pair_ids"] = [p["id"] for p in expanded_payload(payload)]
+    request["model_selection"] = selection
+    if selection["model_requested"] != "runtime-inherited":
+        request["spawn_arguments"]["model"] = selection["model_requested"]
     write_json(out, request)
     return request
 
@@ -226,8 +393,10 @@ def parse_native(record, prompt):
     """
     args = record["spawn_arguments"]
     if (args.get("fork_turns") != "none" or args.get("message") != native_message(record["input_file"], prompt)
-            or set(args) != {"task_name", "fork_turns", "message"}):
-        raise ValueError("Native reviewer must inherit runtime model in a fresh, source-only context.")
+            or set(args) not in ({"task_name", "fork_turns", "message"}, {"task_name", "fork_turns", "message", "model"})
+            or ("model" in args and (not isinstance(args["model"], str)
+                                  or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]+", args["model"])) )):
+        raise ValueError("Native reviewer must use exact supported arguments in a fresh, source-only context.")
     name = record["spawn_result"]["task_name"]
     if not isinstance(name, str) or not name.endswith("/" + args["task_name"]):
         raise ValueError("Native dispatch identity mismatch.")
@@ -238,7 +407,7 @@ def parse_native(record, prompt):
     if not isinstance(answer, str):
         raise ValueError("Native reviewer failed or is still pending.")
     response = json.loads(answer)
-    validate_response(response, [p["id"] for p in json.loads(prompt[len(SYSTEM):])])
+    validate_response(response, [p["id"] for p in payload_from_prompt(prompt)])
     return name, response
 
 
@@ -251,13 +420,20 @@ def import_native(draft, request_file, record_file, out):
     if stage not in {"first", "second"}:
         raise ValueError("Invalid review stage.")
     rows = json.loads(draft.read_text(encoding="utf-8"))
-    prompt = prompt_for(payload_for(rows, draft.parent))
+    batch_rows = selected_rows(rows, request.get("pair_ids"))
+    guard_saved_reviews(batch_rows, stage, out)
+    saved_prompt = Path(request["input_file"]).read_text(encoding="utf-8")
+    if payload_from_prompt(saved_prompt) != expanded_payload(payload_for(batch_rows, draft.parent)):
+        raise ValueError("Native input no longer matches current claims/sources.")
+    prompt = saved_prompt
     trace = Path(record_file).read_text(encoding="utf-8")
     record = json.loads(trace)
     if (record["spawn_arguments"] != request["spawn_arguments"]
             or record["input_file"] != request["input_file"]
             or Path(request["input_file"]).read_text(encoding="utf-8") != prompt):
         raise ValueError("Native record does not match the prepared request.")
+    if request.get("version") == 2 and request.get("model_selection", {}).get("model_requested") != record["spawn_arguments"].get("model", "runtime-inherited"):
+        raise ValueError("Model selection does not match captured dispatch.")
     thread_id, response = parse_native(record, prompt)
     # Each import gets an immutable artifact directory; reruns never overwrite proof.
     run_id = str(uuid.uuid4())
@@ -268,7 +444,8 @@ def import_native(draft, request_file, record_file, out):
     write_json(artifacts / "request.json", request)
     receipt = {"version": 2, "runner": "native_subagent", "stage": stage,
                "run_id": run_id, "thread_id": thread_id, "status": "completed",
-               "model_requested": "runtime-inherited", "provider": "openai",
+               "model_requested": record["spawn_arguments"].get("model", "runtime-inherited"), "provider": "openai",
+               "model_selection": request.get("model_selection", {"model_requested": "runtime-inherited", "backend_verified": False}),
                "blind_to_other_pass": True, "input_sha256": digest(prompt),
                "events_sha256": digest(trace), "recorded_at": datetime.now(timezone.utc).isoformat(),
                "isolation": "fresh context; source-only file handoff; only designated input read instructed, not attested",
@@ -279,7 +456,7 @@ def import_native(draft, request_file, record_file, out):
         if row["id"] not in by_id:
             continue
         judgment = dict(by_id[row["id"]])
-        judgment.update(model="runtime-inherited", blind=True,
+        judgment.update(model=receipt["model_requested"], blind=True,
                         execution_file=str((artifacts / "receipt.json").relative_to(draft.parent)))
         if stage == "first":
             row.update(judgment)
@@ -307,12 +484,12 @@ def verified_execution(row, source, directory, judgment, stage):
                 or receipt.get("model_requested") != judgment.get("model")
                 or not judgment.get("model") or judgment["model"] == "unknown"
                 or receipt.get("input_sha256") != digest(prompt)
-                or receipt.get("events_sha256") != digest(trace) or not prompt.startswith(SYSTEM)):
+                or receipt.get("events_sha256") != digest(trace) or not prompt.startswith((SYSTEM, LEGACY_SYSTEM))):
             return None
         thread_id, response = parse_native(json.loads(trace), prompt) if native else parse_trace(trace)
-        if native and receipt.get("model_requested") != "runtime-inherited":
+        if native and receipt.get("model_requested") != json.loads(trace)["spawn_arguments"].get("model", "runtime-inherited"):
             return None
-        payload = json.loads(prompt[len(SYSTEM):])
+        payload = payload_from_prompt(prompt)
         validate_response(response, [p["id"] for p in payload])
         expected = {"id": row["id"], "sentence": row["sentence"], "reference": row.get("reference", ""),
                     "source_title": source.get("title"), "source_identifier": source.get("identifier"),

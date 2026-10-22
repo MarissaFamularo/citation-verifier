@@ -23,7 +23,7 @@ class NativeTests(unittest.TestCase):
         (self.root / 'manuscript.txt').write_text('Treatment helps.')
 
     def record(self, stage):
-        request = mr.prepare_native(self.root / 'draft.json', stage, self.root / f'{stage}-request.json')
+        request = mr.prepare_native(self.root / 'draft.json', stage, self.root / f'{stage}-request.json', allow_inherited_model=True)
         name = '/root/' + request['spawn_arguments']['task_name']
         answer = {'rows': [{'id': '1', 'relation': 'supports', 'quote': 'Treatment helps.',
                             'reason': 'Synthetic regression only.', 'uncertain': False}]}

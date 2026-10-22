@@ -3,11 +3,15 @@
 An initial skills-based port of [Paper Trellis Citation Verifier](https://github.com/MarissaFamularo/citation-verifier).
 Ask Codex: **“Check whether the citations in this manuscript support its claims.”**
 
+Plugin version: **0.3.3**. The marketplace source and Git ref remain unchanged.
+
 The host model maps citing sentences to references. Two fresh native reviewer
 subagents evaluate identical source-only inputs without inheriting the parent chat.
 Python helpers extract documents, fetch papers, validate evidence, and export JSON/CSV.
 Native agents use the current product session, with no separate provider API key.
-The adapter records `runtime-inherited`; it does not claim a verified model snapshot.
+The adapter supports explicit requested model selection when the current host schema
+exposes it. Unknown inheritance requires an explicit opt-in; neither path claims a
+verified backend snapshot. See the offline improvements below.
 
 ## Install for testing
 
@@ -73,8 +77,8 @@ Fresh contexts do not eliminate correlated errors. Execution records describe wh
 the local runner observed; they are not signed provider attestations. Native records retain exact spawn arguments/results and completion snapshots, not
 fabricated CLI events. Fresh context is requested explicitly. Only the designated source-only input read is
 instructed, not independently attested: native snapshots do not expose tool traces.
-Historical CLI records retain their stricter trace-based tool-use check. Native
-model selection is inherited from the runtime and is not an exact backend ID.
+Historical CLI records retain their stricter trace-based tool-use check. Native model provenance describes the requested selection, not a verified backend ID.
+Historical unknown-inheritance records remain verifiable.
 
 ## Privacy and files
 
@@ -128,3 +132,48 @@ spans refer to text after NFKC, Unicode-minus and decimal-middledot normalizatio
 Numeric compatibility does not establish endpoint, population, study design or
 effect attribution; both blind source reviews and human adjudication remain necessary.
 The synthetic numeric regression controls contain no manuscript or audit fixtures.
+
+### Offline-first improvements (0.3.3)
+
+Run `preflight` before dispatch to save an explicit, resumable envelope. It reports
+reference keys (printed reference, falling back to source path or pair ID), unique
+source files and exact source texts, all pairs, unavailable/oversized pairs,
+pending/completed/blocked stage IDs, full payload bytes and planned batches/judgments.
+These are work units, not quota estimates. Both distinct source-only reviews remain
+required; obtain explicit scope approval before a large run. No near-quota abort
+policy or selective-review verdict was introduced.
+
+New batch inputs keep each entire source text once under its content SHA-256 and
+reference it from pairs. Titles, identifiers and tiers remain attached to each pair,
+even for identical text with differing metadata. Hash and pair binding are rechecked
+on import/export. Old repeated-source receipts and version 2 exports still validate.
+New request/input/output paths are required; existing recorded stages cannot be
+replaced. Select pending batches with repeated `--pair-id ID` flags, and re-run
+preflight after imports. Neither reviewer receives previous judgments or human notes.
+
+`prepare-native` now requires an observed host capability profile for explicit model
+selection, or `--allow-inherited-model` to deliberately accept unknown model/cost.
+Use `--capabilities FILE` on preflight and preparation, with optional `--model ID`.
+The profile supplies a documented lower-cost supported default (`gpt-6-luna` on the
+implementation host), an observed model list and observation provenance. It is not
+a portable capability guarantee, a live model test, or backend attestation. Inspect
+the current target host schema before reuse; do not guess IDs or presume inheritance
+is cheap. Create a current host profile using the template in the skill; no saved local host
+profile is shipped. The adapter passes supported explicit model selection with fresh context;
+it does not override reasoning effort. If the target host lacks this capability,
+preflight explains the limitation; no API/CLI service is silently substituted.
+
+Numeric checks retain whitespace-separated ASCII/Unicode signs, including percentages,
+doses and signed range endpoints. Range separator hyphens keep positive endpoints.
+Exact values still receive no tolerance, and the existing percent/bound/approximate
+positive-person-count controls remain intact.
+
+JSON/CSV reports add overlapping actionable review categories without replacing
+verdicts or human fields. Contradiction labels are candidates for adjudication.
+Sentence-level pairing is explicitly distinguished from an established clause map;
+no exact clause assignment is invented. Selective second passes and provisional
+verdicts remain deferred design proposals, not behavior in this version.
+
+Validation and release scope: [validation/release-0.3.3.md](validation/release-0.3.3.md).
+Refresh the existing GitHub marketplace only after this version is published and
+installation is approved; local source tests do not verify the installed plugin.

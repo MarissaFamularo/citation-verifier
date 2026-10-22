@@ -12,7 +12,7 @@ import unicodedata
 import urllib.parse
 import urllib.request
 import zipfile
-from model_review import run_review, verified_execution, prepare_native, import_native
+from model_review import run_review, verified_execution, prepare_native, import_native, preflight
 from datetime import datetime, timezone
 from pathlib import Path
 from xml.etree import ElementTree as ET
@@ -210,6 +210,37 @@ def finalize_row(row, manuscript, source, *, check_second=True, directory="."):
     return result
 
 
+def review_presentation(row):
+    """Add actionable labels without altering verdicts, judgments or human fields."""
+    categories = []
+    second = row.get("second_pass") or {}
+    checked = row.get("second_pass_validation") or {}
+    if not row.get("source_file") or row.get("verdict") == "needs_full_text":
+        categories.append("evidence_unavailable")
+    if ((row.get("source_file") and (row.get("uncertain") is not False or (second and second.get("uncertain") is not False)))
+            or row.get("relation") in {"silent", "off_topic"}):
+        categories.append("attribution_qualification_uncertainty")
+    if second and row.get("relation") != second.get("relation"):
+        categories.append("reviewer_disagreement")
+    if row.get("relation") == "contradicts" or second.get("relation") == "contradicts":
+        categories.append("likely_claim_source_contradiction")
+    if (row.get("missing_numbers") or checked.get("missing_numbers")
+            or row.get("verdict") == "flagged" or checked.get("verdict") == "flagged"):
+        categories.append("numeric_quote_software_validation_flag")
+    if row.get("verdict") == "needs_second_pass":
+        categories.append("review_execution_pending")
+    actions = {
+        "evidence_unavailable": "Resolve the reference or obtain the missing full text; silence is not contradiction.",
+        "attribution_qualification_uncertainty": "Inspect endpoint, population, qualification and clause attribution in context.",
+        "reviewer_disagreement": "Compare both original reasons and source quotes; adjudicate without discarding either judgment.",
+        "likely_claim_source_contradiction": "Inspect the claimed conflict against both quotes and study context; this is a candidate for human review.",
+        "numeric_quote_software_validation_flag": "Inspect exact numeric checks, units/signs and proposed quotes against the preserved source.",
+        "review_execution_pending": "Complete the missing distinct source-only execution; keep the current verdict pending."}
+    return {"review_categories": categories, "review_actions": [actions[c] for c in categories],
+            "clause_mapping_status": "not_recorded",
+            "clause_guidance": "This pair retains the entire citing sentence. Exact clause mapping is not recorded; inspect attribution ambiguity without assigning clauses or rewriting the claim."}
+
+
 def finalize(draft, manuscript, out):
     draft = Path(draft)
     rows = json.loads(draft.read_text(encoding="utf-8"))
@@ -224,7 +255,9 @@ def finalize(draft, manuscript, out):
         source = None
         if row.get("source_file"):
             source = json.loads((draft.parent / row["source_file"]).read_text(encoding="utf-8"))
-        results.append(finalize_row(row, manuscript_text, source, directory=draft.parent))
+        result = finalize_row(row, manuscript_text, source, directory=draft.parent)
+        result.update(review_presentation(result))
+        results.append(result)
     output = Path(out)
     save_json(str(output) + ".json", {"version": 2, "checked_at": datetime.now(timezone.utc).isoformat(),
                                      "evidence_policy": "Preserve quotes, context, hashes, and execution records; do not redact proof from exports.",
@@ -233,7 +266,8 @@ def finalize(draft, manuscript, out):
               "reason", "source_tier", "source_url", "source_title", "source_identifier", "source_sha256",
               "model", "execution", "quote_span", "source_excerpt", "proposed_quote",
               "second_pass", "second_pass_validation", "second_execution", "second_pass_blind",
-              "missing_numbers", "numeric_checks", "validation_note", "human_verdict", "human_notes"]
+              "missing_numbers", "numeric_checks", "validation_note", "human_verdict", "human_notes",
+              "review_categories", "review_actions", "clause_mapping_status", "clause_guidance"]
     buffer = io.StringIO(newline="")
     writer = csv.DictWriter(buffer, fieldnames=fields, extrasaction="ignore")
     writer.writeheader()
@@ -255,6 +289,9 @@ def check_export(path):
         raise ValueError("Export must be an unmodified version 2 verifier report.")
     executions_checked = 0
     for row in report["rows"]:
+        for key, value in review_presentation(row).items():
+            if key in row and row[key] != value:
+                raise ValueError("Export review presentation changed: " + key + " for " + row["id"])
         # Pending/disputed results need the same auditability as confirmed results.
         # A declared execution must validate even if the verdict is not confirmed.
         if row.get("verdict") in {"supported", "not_supported"} and not row.get("quote"):
@@ -325,10 +362,21 @@ def main():
             sub.add_argument("--model", required=True)
             sub.add_argument("--effort", choices=["medium", "high"], default="high")
             sub.add_argument("--timeout", type=int, default=240)
+    sub = commands.add_parser("preflight")
+    sub.add_argument("input")
+    sub.add_argument("--out", required=True)
+    sub.add_argument("--batch-size", type=int, default=8)
+    sub.add_argument("--max-chars", type=int, default=300_000)
+    sub.add_argument("--capabilities")
+    sub.add_argument("--model")
     sub = commands.add_parser("prepare-native")
     sub.add_argument("input")
     sub.add_argument("--stage", choices=["first", "second"], required=True)
     sub.add_argument("--out", required=True)
+    sub.add_argument("--allow-inherited-model", action="store_true", help="Explicitly accept unknown inherited model/cost when selection is unavailable.")
+    sub.add_argument("--pair-id", action="append", help="Explicit resumable batch IDs; repeat per pair.")
+    sub.add_argument("--capabilities")
+    sub.add_argument("--model")
     sub = commands.add_parser("import-native")
     sub.add_argument("input")
     sub.add_argument("--request", required=True)
@@ -346,8 +394,12 @@ def main():
         elif args.command == "fetch":
             save_json(args.out, fetch_source(args.input))
             print(f"Saved source to {args.out}")
+        elif args.command == "preflight":
+            summary = preflight(args.input, args.batch_size, args.max_chars, args.capabilities, args.model)
+            save_json(args.out, summary)
+            print(json.dumps(summary))
         elif args.command == "prepare-native":
-            print(json.dumps(prepare_native(args.input, args.stage, args.out)))
+            print(json.dumps(prepare_native(args.input, args.stage, args.out, args.pair_id, args.capabilities, args.model, args.allow_inherited_model)))
         elif args.command == "import-native":
             print(json.dumps(import_native(args.input, args.request, args.record, args.out)))
         elif args.command == "model-review":

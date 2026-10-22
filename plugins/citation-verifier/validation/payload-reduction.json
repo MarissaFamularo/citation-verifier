@@ -1,0 +1,33 @@
+{
+  "measurement": "Synthetic payload reduction only; no model calls, token/quota/cost measurement or paper audits.",
+  "method": "Entire old/new prompt UTF-8 bytes, including format instructions; deterministic synthetic fixture from ImprovementTests.repeated. Per batch; first/second contexts each receive the entire input independently.",
+  "cases": [
+    {
+      "pairs": 1,
+      "unique_source_texts": 1,
+      "full_source_utf8_bytes": 37015,
+      "before_prompt_utf8_bytes": 38164,
+      "after_prompt_utf8_bytes": 38708,
+      "reduction_bytes": -544,
+      "reduction_percent": -1.43
+    },
+    {
+      "pairs": 5,
+      "unique_source_texts": 1,
+      "full_source_utf8_bytes": 37015,
+      "before_prompt_utf8_bytes": 186924,
+      "after_prompt_utf8_bytes": 39656,
+      "reduction_bytes": 147268,
+      "reduction_percent": 78.78
+    },
+    {
+      "pairs": 12,
+      "unique_source_texts": 1,
+      "full_source_utf8_bytes": 37015,
+      "before_prompt_utf8_bytes": 447256,
+      "after_prompt_utf8_bytes": 41317,
+      "reduction_bytes": 405939,
+      "reduction_percent": 90.76
+    }
+  ]
+}

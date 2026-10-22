@@ -8,7 +8,7 @@ import re
 import unicodedata
 from decimal import Decimal, ROUND_HALF_UP
 
-NUMBER = re.compile(r'(?<![\w.])[-+]?\d{1,3}(?:[, ]\d{3})+(?:\.\d+)?(?!\d)|(?<![\w.])[-+]?\d+(?:\.\d+)?')
+NUMBER = re.compile(r'(?<![\w.])(?:[-+]\s*)?\d{1,3}(?:[, ]\d{3})+(?:\.\d+)?(?!\d)|(?<![\w.])(?:[-+]\s*)?\d+(?:\.\d+)?')
 UNIT = re.compile(r'\s*(%|percent(?:age)?\b|per\s+cent\b|(?:mg|g|kg)\s*/\s*(?:day|d)\b|participants?\b|individuals?\b|people\b|persons?\b|veterans?\b)', re.I)
 QUALIFIER = re.compile(r'(>=|<=|>|<|≥|≤|more than|greater than|over|at least|less than|under|at most|no more than|nearly|almost|approximately|about|around)\s*$', re.I)
 OPS = {'>': 'gt', 'over': 'gt', 'more than': 'gt', 'greater than': 'gt',
@@ -18,7 +18,11 @@ OPS = {'>': 'gt', 'over': 'gt', 'more than': 'gt', 'greater than': 'gt',
        'about': 'approx', 'around': 'approx'}
 
 def normalize(text):
-    text = unicodedata.normalize('NFKC', str(text)).replace('−', '-')
+    text = unicodedata.normalize('NFKC', str(text))
+    # An ASCII hyphen between numeric endpoints is a range separator, not a
+    # unary sign. Distinguish it before normalizing genuine Unicode minus signs.
+    text = re.sub(r'(?<=[\d%])([ \t]*)-(?=[ \t]*\d)', r'\1–', text)
+    text = text.replace('−', '-')
     return re.sub(r'(?<=\d)·(?=\d)', '.', text)
 
 def unit_name(unit):
@@ -39,7 +43,8 @@ def percent_table(text, start, end):
 def tokens(text, *, source=False):
     text = normalize(text)
     for m in NUMBER.finditer(text):
-        raw = m[0]; value = Decimal(raw.replace(',', '').replace(' ', ''))
+        raw = m[0]
+        value = Decimal(re.sub(r'[,\s]', '', raw))
         suffix = UNIT.match(text[m.end():]); unit = unit_name(suffix[1]) if suffix else None
         if unit == 'persons' and re.match(r'[-\s]+(?:years?|months?|days?)\b', text[m.end()+suffix.end():], re.I):
             unit = 'person_time'

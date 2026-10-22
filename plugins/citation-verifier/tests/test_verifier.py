@@ -224,6 +224,7 @@ class EvidenceTests(unittest.TestCase):
         from unittest.mock import patch
         from types import SimpleNamespace
         row = self.row(source_file="source.json")
+        row.pop("second_pass", None)  # Exercise failure on a pending stage, not replacement.
         (self.directory / "source.json").write_text(json.dumps(self.source()))
         (self.directory / "draft.json").write_text(json.dumps([row]))
         with patch.object(mr.shutil, "which", return_value="/fixture/codex"):
